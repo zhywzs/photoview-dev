@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useMemo, useReducer } from 'react'
+import React, { useCallback, useEffect, useMemo, useReducer } from 'react'
 import { useQuery, gql } from '@apollo/client'
 import PhotoGrid from '../photoGrid/PhotoGrid'
 import PresentView from '../photoGallery/presentView/PresentView'
@@ -22,8 +22,6 @@ import {
   toggleFavoriteAction,
   useMarkFavoriteMutation,
 } from '../photoGallery/photoGalleryMutations'
-import MediaSidebar from '../sidebar/MediaSidebar/MediaSidebar'
-import { SidebarContext } from '../sidebar/Sidebar'
 import client from '../../apolloClient'
 import { GridSectionData } from '../photoGrid/gridLayout'
 import {
@@ -242,8 +240,6 @@ const TimelineGallery = ({ forceFavorites = false }: TimelineGalleryProps) => {
   })
 
   const [markFavorite] = useMarkFavoriteMutation()
-  const { updateSidebar } = useContext(SidebarContext)
-
   const onItemActivate = useCallback(
     (media: MediaGalleryFields, index: number) => {
       openPresentModeAction({ dispatchMedia, activeIndex: index })
@@ -256,13 +252,6 @@ const TimelineGallery = ({ forceFavorites = false }: TimelineGalleryProps) => {
       toggleFavoriteAction({ media, markFavorite })
     },
     [markFavorite]
-  )
-
-  const onItemSelect = useCallback(
-    (media: MediaGalleryFields) => {
-      updateSidebar(<MediaSidebar media={media} />)
-    },
-    [updateSidebar]
   )
 
   // the zoom state is shared with the grid so the date grouping
@@ -357,7 +346,6 @@ const TimelineGallery = ({ forceFavorites = false }: TimelineGalleryProps) => {
         renderSectionTitle={renderSectionTitle}
         onItemActivate={onItemActivate}
         onItemFavorite={onItemFavorite}
-        onItemSelect={onItemSelect}
         activeId={activeMedia?.id}
         zoomLevel={zoom.level}
         onZoomLevelChange={level => zoom.setLevel(level)}

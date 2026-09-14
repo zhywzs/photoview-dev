@@ -401,12 +401,13 @@ const PresentView = ({
         style={{ position: 'absolute', inset: 0, zIndex: 2, ...stageStyle }}
       >
         <div style={{ position: 'absolute', inset: 0, ...trackStyle }}>
-          {/* slides are keyed by media id so a page turn MOVES the
-              already-rendered neighbor node into the center slot
-              instead of re-loading the image */}
+          {/* slides are keyed by media id (no position prefix!) so a page
+              turn MOVES the already-rendered neighbor node into the center
+              slot instead of unmounting/remounting it, which would reload
+              the image and cause a flash */}
           {prevMedia != null && neighborsReady ? (
             <SlideView
-              key={`prev-${prevMedia.id}`}
+              key={prevMedia.id}
               position="-100%"
               media={prevMedia}
               previewOnly
@@ -415,14 +416,14 @@ const PresentView = ({
             <SlideView key="prev-empty" position="-100%" media={null} />
           )}
           <SlideView
-            key={`center-${activeMedia.id}`}
+            key={activeMedia.id}
             position="0"
             media={activeMedia}
             imageLoaded={imageLoaded}
           />
           {nextMedia != null && neighborsReady ? (
             <SlideView
-              key={`next-${nextMedia.id}`}
+              key={nextMedia.id}
               position="100%"
               media={nextMedia}
               previewOnly

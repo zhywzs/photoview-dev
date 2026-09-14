@@ -51,8 +51,6 @@ type PhotoGridProps<T extends MediaGalleryFields> = {
   onItemActivate(item: T, index: number): void
   /** Toggle favorite (hover action on large tiles) */
   onItemFavorite?(item: T, index: number): void
-  /** Open media info (hover action on large tiles) */
-  onItemSelect?(item: T, index: number): void
   /** id of the currently active (selected) media */
   activeId?: string
   /**
@@ -128,7 +126,6 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   renderSectionTitle,
   onItemActivate,
   onItemFavorite,
-  onItemSelect,
   activeId,
   zoomLevel: controlledLevel,
   onZoomLevelChange,
@@ -626,12 +623,9 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         onFavorite={
           onItemFavorite ? () => onItemFavorite(media, absoluteIndex) : undefined
         }
-        onSelect={
-          onItemSelect ? () => onItemSelect(media, absoluteIndex) : undefined
-        }
       />
     ),
-    [dense, activeId, onItemActivate, onItemFavorite, onItemSelect]
+    [dense, activeId, onItemActivate, onItemFavorite]
   )
 
   return (

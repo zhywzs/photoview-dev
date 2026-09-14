@@ -1,4 +1,4 @@
-import React, { useCallback, useContext } from 'react'
+import React, { useCallback } from 'react'
 import { gql } from '@apollo/client'
 import PhotoGrid from '../photoGrid/PhotoGrid'
 import PresentView from './presentView/PresentView'
@@ -11,8 +11,6 @@ import {
   toggleFavoriteAction,
   useMarkFavoriteMutation,
 } from './photoGalleryMutations'
-import MediaSidebar from '../sidebar/MediaSidebar/MediaSidebar'
-import { SidebarContext } from '../sidebar/Sidebar'
 import { MediaGalleryFields } from './__generated__/MediaGalleryFields'
 
 export const MEDIA_GALLERY_FRAGMENT = gql`
@@ -57,8 +55,6 @@ const MediaGallery = ({ mediaState, dispatchMedia }: MediaGalleryProps) => {
 
   const { media, activeIndex, presenting } = mediaState
 
-  const { updateSidebar } = useContext(SidebarContext)
-
   const onItemActivate = useCallback(
     (item: MediaGalleryFields, index: number) => {
       openPresentModeAction({ dispatchMedia, activeIndex: index })
@@ -73,14 +69,6 @@ const MediaGallery = ({ mediaState, dispatchMedia }: MediaGalleryProps) => {
     [markFavorite]
   )
 
-  const onItemSelect = useCallback(
-    (item: MediaGalleryFields, index: number) => {
-      dispatchMedia({ type: 'selectImage', index })
-      updateSidebar(<MediaSidebar media={item} />)
-    },
-    [dispatchMedia, updateSidebar]
-  )
-
   const activeMedia = activeIndex >= 0 ? media[activeIndex] : undefined
 
   return (
@@ -90,7 +78,6 @@ const MediaGallery = ({ mediaState, dispatchMedia }: MediaGalleryProps) => {
           items={media}
           onItemActivate={onItemActivate}
           onItemFavorite={onItemFavorite}
-          onItemSelect={onItemSelect}
           activeId={activeMedia?.id}
         />
       </div>
