@@ -27,7 +27,7 @@ const AlbumBoxes = ({ error, albums, getCustomLink }: AlbumBoxesProps) => {
     }
   }
 
-  return <div className="-mx-3 my-6">{albumElements}</div>
+  return <div className="-mx-1.5 my-4 flex flex-wrap">{albumElements}</div>
 }
 
 export default AlbumBoxes

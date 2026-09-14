@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
 import styled from 'styled-components'
-import { debounce, DebouncedFn } from '../../../helpers/utils'
 import { closePresentModeAction, GalleryAction } from '../mediaGalleryReducer'
 
 import { useSwipeable } from 'react-swipeable'
@@ -48,8 +47,9 @@ const OverlayButton = styled.button`
 `
 
 const ExitButton = styled(OverlayButton)`
-  left: 28px;
-  top: 28px;
+  left: 20px;
+  top: max(16px, env(safe-area-inset-top, 0px));
+  z-index: 20;
 `
 
 const NavigationButton = styled(OverlayButton)<{ align: 'left' | 'right' }>`
@@ -67,33 +67,77 @@ const NavigationButton = styled(OverlayButton)<{ align: 'left' | 'right' }>`
   }
 `
 
+const ActionBar = styled.div<{ visible: boolean }>`
+  position: absolute;
+  right: 16px;
+  top: max(16px, env(safe-area-inset-top, 0px));
+  z-index: 20;
+  display: flex;
+  gap: 4px;
+
+  opacity: ${props => (props.visible ? 1 : 0)};
+  transition: opacity 300ms;
+`
+
+const ActionButton = styled.button`
+  width: 48px;
+  height: 48px;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.4);
+  border: none;
+  outline: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  color: rgba(255, 255, 255, 0.85);
+  transition: background-color 140ms, color 140ms;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.65);
+    color: white;
+  }
+
+  & svg {
+    width: 24px;
+    height: 24px;
+  }
+`
+
 type PresentNavigationOverlayProps = {
   children?: React.ReactChild
   dispatchMedia: React.Dispatch<GalleryAction>
   disableSaveCloseInHistory?: boolean
+  favorite?: boolean
+  onToggleFavorite?(): void
+  onToggleInfo?(): void
 }
 
 const PresentNavigationOverlay = ({
   children,
   dispatchMedia,
   disableSaveCloseInHistory,
+  favorite,
+  onToggleFavorite,
+  onToggleInfo,
 }: PresentNavigationOverlayProps) => {
-  const [hide, setHide] = useState(true)
-  const onMouseMove = useRef<null | DebouncedFn<() => void>>(null)
+  // controls are visible by default (mobile has no mouse move),
+  // and hide after a period of inactivity
+  const [hide, setHide] = useState(false)
+  const hideTimer = useRef<number | undefined>(undefined)
 
   useEffect(() => {
-    onMouseMove.current = debounce(
-      () => {
-        setHide(hide => !hide)
-      },
-      2000,
-      true
-    )
-
     return () => {
-      onMouseMove.current?.cancel()
+      if (hideTimer.current != null) window.clearTimeout(hideTimer.current)
     }
   }, [])
+
+  const showControls = () => {
+    setHide(false)
+    if (hideTimer.current != null) window.clearTimeout(hideTimer.current)
+    hideTimer.current = window.setTimeout(() => setHide(true), 2500)
+  }
 
   const handlers = useSwipeable({
     onSwipedLeft: () => dispatchMedia({ type: 'nextImage' }),
@@ -105,9 +149,7 @@ const PresentNavigationOverlay = ({
   return (
     <StyledOverlayContainer
       data-testid="present-overlay"
-      onMouseMove={() => {
-        onMouseMove.current && onMouseMove.current()
-      }}
+      onMouseMove={showControls}
     >
     <div {...handlers}>
       {children}
@@ -127,6 +169,40 @@ const PresentNavigationOverlay = ({
       >
         <NextIcon />
       </NavigationButton>
+
+      <ActionBar visible={!hide}>
+        {onToggleFavorite && (
+          <ActionButton
+            aria-label={favorite ? 'Remove favorite' : 'Add favorite'}
+            onClick={onToggleFavorite}
+            style={{ color: favorite ? '#ff5a76' : undefined }}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill={favorite ? 'currentColor' : 'none'}
+              stroke="currentColor"
+              strokeWidth={favorite ? 0 : 2}
+            >
+              <path d="M13.999086,1 C15.0573371,1 16.0710089,1.43342987 16.8190212,2.20112483 C17.5765039,2.97781012 18,4.03198704 18,5.13009709 C18,6.22820714 17.5765039,7.28238406 16.8188574,8.05923734 L9.49975689,15.5674041 L2.18065643,8.05923735 C1.39216493,7.2503776 0.999999992,6.18971057 1,5.13009711 C1.00000001,4.07048366 1.39216496,3.00981663 2.18065647,2.20095689 C2.95931483,1.40218431 3.97927681,1.00049878 5.00042783,1.00049878 C6.02157882,1.00049878 7.04154078,1.4021843 7.82019912,2.20095684 L9.4997569,3.92390079 L11.1794784,2.20078881 C11.9271637,1.43342987 12.9408349,1 13.999086,1 L13.999086,1 Z" />
+            </svg>
+          </ActionButton>
+        )}
+        {onToggleInfo && (
+          <ActionButton aria-label="Show media info" onClick={onToggleInfo}>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="16" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12.01" y2="8" />
+            </svg>
+          </ActionButton>
+        )}
+      </ActionBar>
+
       <ExitButton
         aria-label="Exit presentation mode"
         className={hide ? 'hide' : undefined}

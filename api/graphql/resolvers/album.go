@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	api "github.com/photoview/photoview/api/graphql"
 	"github.com/photoview/photoview/api/graphql/auth"
@@ -113,6 +114,34 @@ func (r *mutationResolver) SetAlbumCover(ctx context.Context, coverID int) (*mod
 	}
 
 	return actions.SetAlbumCover(r.DB(ctx), user, coverID)
+}
+
+// SetAlbumTitle is the resolver for the setAlbumTitle field.
+func (r *mutationResolver) SetAlbumTitle(ctx context.Context, albumID int, title string) (*models.Album, error) {
+	user := auth.UserFromContext(ctx)
+	if user == nil || !user.Admin {
+		return nil, errors.New("unauthorized")
+	}
+
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil, errors.New("album title cannot be empty")
+	}
+	if len(title) > 128 {
+		return nil, errors.New("album title cannot be longer than 128 characters")
+	}
+
+	var album models.Album
+	if err := r.DB(ctx).First(&album, albumID).Error; err != nil {
+		return nil, fmt.Errorf("could not get album by id: %w", err)
+	}
+
+	album.Title = title
+	if err := r.DB(ctx).Save(&album).Error; err != nil {
+		return nil, fmt.Errorf("could not update album title: %w", err)
+	}
+
+	return &album, nil
 }
 
 // MyAlbums is the resolver for the myAlbums field.

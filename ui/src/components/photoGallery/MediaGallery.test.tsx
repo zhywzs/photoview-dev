@@ -17,7 +17,10 @@ test('photo gallery with media', () => {
     media: [
       {
         id: '165',
+        title: 'test media',
         type: MediaType.Photo,
+      thumbnailSmall: null,
+      thumbnailTiny: null,
         thumbnail: {
           url: '/photo/thumbnail_3666760020_jpg_x76GG5pS.jpg',
           width: 768,
@@ -32,7 +35,10 @@ test('photo gallery with media', () => {
       },
       {
         id: '122',
+        title: 'test media',
         type: MediaType.Photo,
+      thumbnailSmall: null,
+      thumbnailTiny: null,
         thumbnail: null,
         highRes: null,
         videoWeb: null,
@@ -42,7 +48,10 @@ test('photo gallery with media', () => {
       },
       {
         id: '98',
+        title: 'test media',
         type: MediaType.Video,
+      thumbnailSmall: null,
+      thumbnailTiny: null,
         thumbnail: null,
         highRes: null,
         videoWeb: null,
@@ -94,7 +103,10 @@ describe('photo gallery presenting', () => {
       media: [
         {
           id: '165',
+          title: 'test media',
           type: MediaType.Photo,
+      thumbnailSmall: null,
+      thumbnailTiny: null,
           thumbnail: {
             url: '/photo/thumbnail_3666760020_jpg_x76GG5pS.jpg',
             width: 768,

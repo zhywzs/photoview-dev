@@ -62,6 +62,36 @@ func (m *Media) GetThumbnail() (*MediaURL, error) {
 	return nil, nil
 }
 
+func (m *Media) GetThumbnailSmall() (*MediaURL, error) {
+	if len(m.MediaURL) == 0 {
+		return nil, errors.New("media.MediaURL is empty")
+	}
+
+	for _, url := range m.MediaURL {
+		if url.Purpose == PhotoThumbnailSmall {
+			url.Media = m
+			return &url, nil
+		}
+	}
+
+	return nil, nil
+}
+
+func (m *Media) GetThumbnailTiny() (*MediaURL, error) {
+	if len(m.MediaURL) == 0 {
+		return nil, errors.New("media.MediaURL is empty")
+	}
+
+	for _, url := range m.MediaURL {
+		if url.Purpose == PhotoThumbnailTiny {
+			url.Media = m
+			return &url, nil
+		}
+	}
+
+	return nil, nil
+}
+
 func (m *Media) GetHighRes() (*MediaURL, error) {
 	if len(m.MediaURL) == 0 {
 		return nil, errors.New("media.MediaURL is empty")
@@ -96,11 +126,13 @@ var AllMediaType = []MediaType{
 type MediaPurpose string
 
 const (
-	PhotoThumbnail MediaPurpose = "thumbnail"
-	PhotoHighRes   MediaPurpose = "high-res"
-	MediaOriginal  MediaPurpose = "original"
-	VideoWeb       MediaPurpose = "video-web"
-	VideoThumbnail MediaPurpose = "video-thumbnail"
+	PhotoThumbnail      MediaPurpose = "thumbnail"
+	PhotoThumbnailSmall MediaPurpose = "thumbnail-small"
+	PhotoThumbnailTiny  MediaPurpose = "thumbnail-tiny"
+	PhotoHighRes        MediaPurpose = "high-res"
+	MediaOriginal       MediaPurpose = "original"
+	VideoWeb            MediaPurpose = "video-web"
+	VideoThumbnail      MediaPurpose = "video-thumbnail"
 )
 
 type MediaURL struct {
@@ -134,7 +166,7 @@ func (p *MediaURL) CachedPath() (string, error) {
 		return "", errors.New("mediaURL.Media is nil")
 	}
 
-	if p.Purpose == PhotoThumbnail || p.Purpose == PhotoHighRes || p.Purpose == VideoThumbnail || p.Purpose == VideoWeb {
+	if p.Purpose == PhotoThumbnail || p.Purpose == PhotoThumbnailSmall || p.Purpose == PhotoThumbnailTiny || p.Purpose == PhotoHighRes || p.Purpose == VideoThumbnail || p.Purpose == VideoWeb {
 		cachedPath = path.Join(utils.MediaCachePath(), strconv.Itoa(int(p.Media.AlbumID)), strconv.Itoa(int(p.MediaID)),
 			p.MediaName)
 	} else if p.Purpose == MediaOriginal {

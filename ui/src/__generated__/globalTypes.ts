@@ -53,6 +53,16 @@ export enum OrderDirection {
   DESC = "DESC",
 }
 
+/**
+ * Geographic bounding box used to filter media by location
+ */
+export interface GeoBoundingBox {
+  minLatitude: number;
+  maxLatitude: number;
+  minLongitude: number;
+  maxLongitude: number;
+}
+
 //==============================================================
 // END Enums and Input Objects
 //==============================================================

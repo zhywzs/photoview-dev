@@ -1,12 +1,12 @@
 import classNames, { Argument as ClassNamesArg } from 'classnames'
 import { overrideTailwindClasses } from 'tailwind-override'
 
-export interface DebouncedFn<F extends (...args: unknown[]) => unknown> {
+export interface DebouncedFn<F extends (...args: never[]) => unknown> {
   (...args: Parameters<F>): void
   cancel(): void
 }
 
-export function debounce<F extends (...args: unknown[]) => unknown>(
+export function debounce<F extends (...args: never[]) => unknown>(
   func: F,
   wait: number,
   triggerRising?: boolean

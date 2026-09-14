@@ -14,6 +14,8 @@ const loadersKey contextKey = "dataloaders"
 
 type Loaders struct {
 	MediaThumbnail      *MediaURLLoader
+	MediaThumbnailSmall *MediaURLLoader
+	MediaThumbnailTiny  *MediaURLLoader
 	MediaHighres        *MediaURLLoader
 	MediaVideoWeb       *MediaURLLoader
 	UserFromAccessToken *UserLoader
@@ -26,6 +28,8 @@ func Middleware(db *gorm.DB) mux.MiddlewareFunc {
 
 			ctx := context.WithValue(r.Context(), loadersKey, &Loaders{
 				MediaThumbnail:      NewThumbnailMediaURLLoader(db),
+				MediaThumbnailSmall: NewThumbnailSmallMediaURLLoader(db),
+				MediaThumbnailTiny:  NewThumbnailTinyMediaURLLoader(db),
 				MediaHighres:        NewHighresMediaURLLoader(db),
 				MediaVideoWeb:       NewVideoWebMediaURLLoader(db),
 				UserFromAccessToken: NewUserLoaderByToken(db),

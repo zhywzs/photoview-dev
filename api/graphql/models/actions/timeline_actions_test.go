@@ -88,7 +88,7 @@ func TestMyTimeline(t *testing.T) {
 	assert.NoError(t, db.Model(&anotherUser).Association("Albums").Append(&anotherAlbum))
 
 	t.Run("MyTimeline with no filters", func(t *testing.T) {
-		timelineMedia, err := actions.MyTimeline(db, user, nil, nil, nil)
+		timelineMedia, err := actions.MyTimeline(db, user, nil, nil, nil, nil)
 
 		assert.NoError(t, err)
 		assert.Len(t, timelineMedia, 4)
@@ -101,17 +101,46 @@ func TestMyTimeline(t *testing.T) {
 
 	t.Run("MyTimeline with only favorites", func(t *testing.T) {
 		favorites := true
-		timelineMedia, err := actions.MyTimeline(db, user, nil, &favorites, nil)
+		timelineMedia, err := actions.MyTimeline(db, user, nil, &favorites, nil, nil)
 
 		assert.NoError(t, err)
 		assert.Len(t, timelineMedia, 1)
 	})
 
-	t.Run("MyTimeline before date", func(t *testing.T) {
-		beforeDate := time.Unix(1629792000, 0) // Aug 24 2021 08:00:00
-		timelineMedia, err := actions.MyTimeline(db, user, nil, nil, &beforeDate)
+	t.Run("MyTimeline on or after date", func(t *testing.T) {
+		fromDate := time.Unix(1629792000, 0) // Aug 24 2021 08:00:00
+		timelineMedia, err := actions.MyTimeline(db, user, nil, nil, &fromDate, nil)
 
 		assert.NoError(t, err)
 		assert.Len(t, timelineMedia, 2)
+
+		for i, title := range []string{"pic1", "pic3"} {
+			assert.Equalf(t, timelineMedia[i].Title, title, "Element %d didn't match: got %s expected %s", i, timelineMedia[i].Title, title)
+		}
+	})
+
+	t.Run("MyTimeline on or before date", func(t *testing.T) {
+		toDate := time.Unix(1629792000, 0) // Aug 24 2021 08:00:00
+		timelineMedia, err := actions.MyTimeline(db, user, nil, nil, nil, &toDate)
+
+		assert.NoError(t, err)
+		assert.Len(t, timelineMedia, 2)
+
+		for i, title := range []string{"pic2", "pic4"} {
+			assert.Equalf(t, timelineMedia[i].Title, title, "Element %d didn't match: got %s expected %s", i, timelineMedia[i].Title, title)
+		}
+	})
+
+	t.Run("MyTimeline within date range", func(t *testing.T) {
+		fromDate := time.Unix(1628726400, 0) // Aug 12 2021 00:00:00
+		toDate := time.Unix(1629072000, 0)   // Aug 16 2021 00:00:00
+		timelineMedia, err := actions.MyTimeline(db, user, nil, nil, &fromDate, &toDate)
+
+		assert.NoError(t, err)
+		assert.Len(t, timelineMedia, 2)
+
+		for i, title := range []string{"pic2", "pic4"} {
+			assert.Equalf(t, timelineMedia[i].Title, title, "Element %d didn't match: got %s expected %s", i, timelineMedia[i].Title, title)
+		}
 	})
 }

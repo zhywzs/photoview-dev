@@ -34,7 +34,7 @@ const Layout = ({ children, title, ...otherProps }: LayoutProps) => {
             <MainMenu />
           </Authorized>
           <div
-            className={`mx-3 my-3 lg:mt-5 lg:mr-8 lg:ml-[292px] ${
+            className={`mx-3 my-3 lg:mt-5 lg:mr-8 lg:ml-[260px] pb-24 lg:pb-4 ${
               pinned && sidebarContent ? 'lg:pr-[420px]' : ''
             }`}
             id="layout-content"

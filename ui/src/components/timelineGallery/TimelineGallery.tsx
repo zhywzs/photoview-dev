@@ -1,23 +1,38 @@
-import React, { useRef, useEffect, useReducer } from 'react'
+import React, { useCallback, useContext, useEffect, useMemo, useReducer } from 'react'
 import { useQuery, gql } from '@apollo/client'
-import TimelineGroupDate from './TimelineGroupDate'
+import PhotoGrid from '../photoGrid/PhotoGrid'
 import PresentView from '../photoGallery/presentView/PresentView'
 import useURLParameters from '../../hooks/useURLParameters'
 import useScrollPagination from '../../hooks/useScrollPagination'
-import PaginateLoader from '../PaginateLoader'
+import PaginateLoader from '../../components/PaginateLoader'
 import { useTranslation } from 'react-i18next'
+import { MediaGalleryFields } from '../photoGallery/__generated__/MediaGalleryFields'
 import {
   myTimeline,
   myTimelineVariables,
   myTimeline_myTimeline,
 } from './__generated__/myTimeline'
 import {
-  getActiveTimelineImage as getActiveTimelineMedia,
-  timelineGalleryReducer,
-} from './timelineGalleryReducer'
-import { urlPresentModeSetupHook } from '../photoGallery/mediaGalleryReducer'
-import TimelineFilters from './TimelineFilters'
+  mediaGalleryReducer,
+  openPresentModeAction,
+  urlPresentModeSetupHook,
+  MediaGalleryState,
+} from '../photoGallery/mediaGalleryReducer'
+import {
+  toggleFavoriteAction,
+  useMarkFavoriteMutation,
+} from '../photoGallery/photoGalleryMutations'
+import MediaSidebar from '../sidebar/MediaSidebar/MediaSidebar'
+import { SidebarContext } from '../sidebar/Sidebar'
 import client from '../../apolloClient'
+import { GridSectionData } from '../photoGrid/gridLayout'
+import {
+  DateGroup,
+  granularityForColumns,
+  groupTimeline,
+  targetRowsForColumns,
+} from '../photoGrid/timelineGrouping'
+import { COLUMN_LEVELS, useZoomLevels } from '../photoGrid/useZoomLevels'
 
 export const MY_TIMELINE_QUERY = gql`
   query myTimeline(
@@ -25,10 +40,12 @@ export const MY_TIMELINE_QUERY = gql`
     $limit: Int
     $offset: Int
     $fromDate: Time
+    $toDate: Time
   ) {
     myTimeline(
       onlyFavorites: $onlyFavorites
       fromDate: $fromDate
+      toDate: $toDate
       paginate: { limit: $limit, offset: $offset }
     ) {
       id
@@ -36,6 +53,16 @@ export const MY_TIMELINE_QUERY = gql`
       type
       blurhash
       thumbnail {
+        url
+        width
+        height
+      }
+      thumbnailSmall {
+        url
+        width
+        height
+      }
+      thumbnailTiny {
         url
         width
         height
@@ -58,40 +85,104 @@ export const MY_TIMELINE_QUERY = gql`
   }
 `
 
-export type TimelineGroup = {
-  date: string
-  albums: TimelineGroupAlbum[]
+type TimelineGalleryProps = {
+  /** Force the favorites filter on, regardless of URL parameters */
+  forceFavorites?: boolean
 }
 
-export type TimelineGroupAlbum = {
-  id: string
-  title: string
-  media: myTimeline_myTimeline[]
+/**
+ * Format a group title. Compact mode is used for the floating date pill.
+ */
+function formatGroupTitle(
+  group: Pick<DateGroup<unknown>, 'start' | 'end' | 'unit'>,
+  compact: boolean,
+  language: string
+): string {
+  const start = group.start
+  const end = group.end
+  const sameMonth = start.slice(0, 7) == end.slice(0, 7)
+  const sameYear = start.slice(0, 4) == end.slice(0, 4)
+
+  const startDate = new Date(`${start}T00:00:00`)
+  const endDate = new Date(`${end}T00:00:00`)
+
+  const monthStyle = compact ? 'short' : 'long'
+
+  if (group.unit == 'month') {
+    const monthWithYear = new Intl.DateTimeFormat(language, {
+      year: 'numeric',
+      month: monthStyle,
+    })
+    if (sameMonth) return monthWithYear.format(endDate)
+
+    const monthOnly = new Intl.DateTimeFormat(language, { month: monthStyle })
+    const startPart = sameYear
+      ? monthOnly.format(endDate)
+      : monthWithYear.format(endDate)
+    return `${startPart} – ${monthWithYear.format(startDate)}`
+  }
+
+  if (start == end) {
+    if (!compact) {
+      return new Intl.DateTimeFormat(language, {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      }).format(startDate)
+    }
+    const nowYear = new Date().getFullYear()
+    if (sameYear && +start.slice(0, 4) == nowYear) {
+      return `${+start.slice(5, 7)}/${+start.slice(8, 10)}`
+    }
+    return start.replaceAll('-', '/')
+  }
+
+  if (!compact) {
+    const endFormat = new Intl.DateTimeFormat(language, {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    })
+    const startFormat = new Intl.DateTimeFormat(
+      language,
+      sameYear ? { month: 'long', day: 'numeric' } : {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      }
+    )
+    return `${startFormat.format(startDate)} – ${endFormat.format(endDate)}`
+  }
+
+  // compact numeric range, e.g. "7/3 – 7/18" or "2025/7/3 – 2026/1/18"
+  const compactDate = (date: string, withYear: boolean) =>
+    withYear
+      ? date.replaceAll('-', '/')
+      : `${+date.slice(5, 7)}/${+date.slice(8, 10)}`
+  return `${compactDate(start, !sameYear)} – ${compactDate(end, true)}`
 }
 
-const TimelineGallery = () => {
-  const { t } = useTranslation()
+const TimelineGallery = ({ forceFavorites = false }: TimelineGalleryProps) => {
+  const { t, i18n } = useTranslation()
 
-  const { getParam, setParam } = useURLParameters()
+  const { getParam, setParams } = useURLParameters()
 
-  const onlyFavorites = getParam('favorites') == '1' ? true : false
-  const setOnlyFavorites = (favorites: boolean) =>
-    setParam('favorites', favorites ? '1' : null)
+  const onlyFavorites =
+    forceFavorites || getParam('favorites') == '1' ? true : false
 
-  const filterDate = getParam('date')
-  const setFilterDate = (x: string) => setParam('date', x)
+  const filterDateFrom = getParam('dateFrom')
+  const filterDateTo = getParam('dateTo')
 
-  const favoritesNeedsRefresh = useRef(false)
+  const fromDate = filterDateFrom != null ? `${filterDateFrom}T00:00:00Z` : undefined
+  const toDate = filterDateTo ? `${filterDateTo}T23:59:59Z` : undefined
 
-  const [mediaState, dispatchMedia] = useReducer(timelineGalleryReducer, {
-    presenting: false,
-    timelineGroups: [],
-    activeIndex: {
-      date: -1,
-      album: -1,
-      media: -1,
-    },
-  })
+  // Clicking a date label filters the timeline to that period
+  const filterPeriod = (start: string | null, end: string | null) => {
+    setParams([
+      { key: 'dateFrom', value: start },
+      { key: 'dateTo', value: end },
+    ])
+  }
 
   const { data, error, loading, refetch, fetchMore } = useQuery<
     myTimeline,
@@ -99,9 +190,8 @@ const TimelineGallery = () => {
   >(MY_TIMELINE_QUERY, {
     variables: {
       onlyFavorites,
-      fromDate: filterDate
-        ? `${parseInt(filterDate) + 1}-01-01T00:00:00Z`
-        : undefined,
+      fromDate,
+      toDate,
       offset: 0,
       limit: 200,
     },
@@ -115,30 +205,35 @@ const TimelineGallery = () => {
       getItems: data => data.myTimeline,
     })
 
+  const [mediaState, dispatchMedia] = useReducer(mediaGalleryReducer, {
+    presenting: false,
+    activeIndex: -1,
+    media: [],
+  } as MediaGalleryState)
+
   useEffect(() => {
     dispatchMedia({
-      type: 'replaceTimelineGroups',
-      timeline: data?.myTimeline || [],
+      type: 'replaceMedia',
+      media: data?.myTimeline || [],
     })
   }, [data])
 
   useEffect(() => {
-    ; (async () => {
+    ;(async () => {
       await client.resetStore()
       await refetch({
         onlyFavorites,
-        fromDate: filterDate
-          ? `${parseInt(filterDate) + 1}-01-01T00:00:00Z`
-          : undefined,
+        fromDate,
+        toDate,
         offset: 0,
         limit: 200,
       })
     })()
-  }, [filterDate])
+  }, [fromDate, toDate])
 
   urlPresentModeSetupHook({
     dispatchMedia,
-    openPresentMode: (_event) => {
+    openPresentMode: () => {
       dispatchMedia({
         type: 'openPresentMode',
         activeIndex: mediaState.activeIndex,
@@ -146,45 +241,144 @@ const TimelineGallery = () => {
     },
   })
 
-  useEffect(() => {
-    favoritesNeedsRefresh.current = false
-    refetch({
-      onlyFavorites: onlyFavorites,
-    })
-  }, [onlyFavorites])
+  const [markFavorite] = useMarkFavoriteMutation()
+  const { updateSidebar } = useContext(SidebarContext)
+
+  const onItemActivate = useCallback(
+    (media: MediaGalleryFields, index: number) => {
+      openPresentModeAction({ dispatchMedia, activeIndex: index })
+    },
+    []
+  )
+
+  const onItemFavorite = useCallback(
+    (media: MediaGalleryFields) => {
+      toggleFavoriteAction({ media, markFavorite })
+    },
+    [markFavorite]
+  )
+
+  const onItemSelect = useCallback(
+    (media: MediaGalleryFields) => {
+      updateSidebar(<MediaSidebar media={media} />)
+    },
+    [updateSidebar]
+  )
+
+  // the zoom state is shared with the grid so the date grouping
+  // granularity can follow the zoom level
+  const zoom = useZoomLevels()
+  const columns = COLUMN_LEVELS[zoom.level]
+
+  // group the timeline into adaptive date sections for the virtualized grid
+  const { sections, sectionRanges } = useMemo(() => {
+    const timeline = data?.myTimeline || []
+
+    const granularity = granularityForColumns(columns)
+    const targetRows = targetRowsForColumns(columns)
+    const groups = groupTimeline(timeline, granularity, columns, targetRows)
+
+    // dense levels show the title in a narrow floating pill
+    const compact = columns > 5
+
+    const builtSections: GridSectionData<myTimeline_myTimeline>[] = []
+    const ranges = new Map<string, { start: string; end: string; count: number }>()
+
+    for (const group of groups) {
+      builtSections.push({
+        key: group.key,
+        title: formatGroupTitle(group, compact, i18n.language),
+        items: group.items,
+      })
+      ranges.set(group.key, {
+        start: group.start,
+        end: group.end,
+        count: group.items.length,
+      })
+    }
+
+    return { sections: builtSections, sectionRanges: ranges }
+  }, [data, columns, i18n.language])
+
+  const renderSectionTitle = useCallback(
+    (title: string, sectionKey: string) => {
+      const range = sectionRanges.get(sectionKey)
+      const isFiltered =
+        range != null &&
+        filterDateFrom == range.start &&
+        filterDateTo == range.end
+
+      const filterLabel = isFiltered
+        ? t('timeline.period_filter.clear', 'Clear date filter')
+        : t('timeline.period_filter.filter', 'Filter by this period')
+
+      return (
+        <div className="h-full flex items-center gap-2 px-1">
+          <button
+            className={`text-sm font-semibold text-gray-700 dark:text-gray-200 rounded px-1.5 py-0.5 -ml-1.5 hover:bg-gray-100 dark:hover:bg-[#2c333a] focus:outline-none focus:ring-2 focus:ring-blue-400 ${
+              isFiltered ? 'underline' : ''
+            }`}
+            aria-label={`${title}, ${filterLabel}`}
+            title={filterLabel}
+            onClick={() => {
+              if (range == null) return
+              filterPeriod(isFiltered ? null : range.start, isFiltered ? null : range.end)
+            }}
+          >
+            {title}
+          </button>
+          <span className="text-xs text-gray-400 dark:text-gray-500 tabular-nums">
+            {range != null &&
+              t('timeline.period_filter.photo_count', {
+                defaultValue: '{{count}} photos',
+                count: range.count,
+              })}
+          </span>
+        </div>
+      )
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sectionRanges, filterDateFrom, filterDateTo, t]
+  )
 
   if (error) {
     return <div>{error.message}</div>
   }
 
-  const timelineGroups = mediaState.timelineGroups.map((_, i) => (
-    <TimelineGroupDate
-      key={i}
-      groupIndex={i}
-      mediaState={mediaState}
-      dispatchMedia={dispatchMedia}
-    />
-  ))
+  const activeMedia =
+    mediaState.activeIndex >= 0
+      ? mediaState.media[mediaState.activeIndex]
+      : undefined
 
   return (
-    <div className="overflow-x-hidden">
-      <TimelineFilters
-        onlyFavorites={onlyFavorites}
-        setOnlyFavorites={setOnlyFavorites}
-        filterDate={filterDate}
-        setFilterDate={setFilterDate}
+    <div className="-mx-3 lg:mx-0 overflow-x-hidden">
+      <PhotoGrid
+        sections={sections}
+        renderSectionTitle={renderSectionTitle}
+        onItemActivate={onItemActivate}
+        onItemFavorite={onItemFavorite}
+        onItemSelect={onItemSelect}
+        activeId={activeMedia?.id}
+        zoomLevel={zoom.level}
+        onZoomLevelChange={level => zoom.setLevel(level)}
       />
-      <div className="-mx-3 flex flex-wrap" ref={containerElem}>
-        {timelineGroups}
+      <div ref={containerElem}>
+        <PaginateLoader
+          active={!finishedLoadingMore && !loading}
+          text={t('general.loading.paginate.media', 'Loading more media')}
+        />
       </div>
-      <PaginateLoader
-        active={!finishedLoadingMore && !loading}
-        text={t('general.loading.paginate.media', 'Loading more media')}
-      />
-      {mediaState.presenting && (
+      {mediaState.presenting && activeMedia != null && (
         <PresentView
-          activeMedia={getActiveTimelineMedia({ mediaState })!}
+          activeMedia={activeMedia}
           dispatchMedia={dispatchMedia}
+          favorite={activeMedia.favorite}
+          onToggleFavorite={() => {
+            toggleFavoriteAction({ media: activeMedia, markFavorite })
+          }}
+          onToggleInfo={() => {
+            updateSidebar(<MediaSidebar media={activeMedia} />)
+          }}
         />
       )}
     </div>

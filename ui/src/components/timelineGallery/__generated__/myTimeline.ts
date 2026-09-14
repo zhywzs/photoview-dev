@@ -25,6 +25,38 @@ export interface myTimeline_myTimeline_thumbnail {
   height: number;
 }
 
+export interface myTimeline_myTimeline_thumbnailSmall {
+  __typename: "MediaURL";
+  /**
+   * URL for previewing the image
+   */
+  url: string;
+  /**
+   * Width of the image in pixels
+   */
+  width: number;
+  /**
+   * Height of the image in pixels
+   */
+  height: number;
+}
+
+export interface myTimeline_myTimeline_thumbnailTiny {
+  __typename: "MediaURL";
+  /**
+   * URL for previewing the image
+   */
+  url: string;
+  /**
+   * Width of the image in pixels
+   */
+  width: number;
+  /**
+   * Height of the image in pixels
+   */
+  height: number;
+}
+
 export interface myTimeline_myTimeline_highRes {
   __typename: "MediaURL";
   /**
@@ -69,6 +101,14 @@ export interface myTimeline_myTimeline {
    */
   thumbnail: myTimeline_myTimeline_thumbnail | null;
   /**
+   * URL to display the media in a small resolution (max 256px), used for zoomed out gallery views
+   */
+  thumbnailSmall: myTimeline_myTimeline_thumbnailSmall | null;
+  /**
+   * URL to display the media in a tiny resolution (max 128px), used for ultra dense gallery views
+   */
+  thumbnailTiny: myTimeline_myTimeline_thumbnailTiny | null;
+  /**
    * URL to display the photo in full resolution, will be null for videos
    */
   highRes: myTimeline_myTimeline_highRes | null;
@@ -99,4 +139,5 @@ export interface myTimelineVariables {
   limit?: number | null;
   offset?: number | null;
   fromDate?: Time | null;
+  toDate?: Time | null;
 }

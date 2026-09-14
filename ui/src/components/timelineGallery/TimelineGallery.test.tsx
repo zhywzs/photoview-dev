@@ -30,8 +30,14 @@ test('timeline with media', async () => {
     </MemoryRouter>
   )
 
-  expect(screen.queryByLabelText('Show only favorites')).toBeInTheDocument()
-
-  expect(await screen.findAllByRole('link')).toHaveLength(4)
+  // 5 media items are rendered as tiles
   expect(await screen.findAllByRole('img')).toHaveLength(5)
+
+  // at the default zoom level (5 columns) the sparse days merge into a
+  // single date group (2020-11-09 .. 2020-12-13) with a header bar
+  const dateButtons = await screen.findAllByRole('button', {
+    name: /2020/,
+  })
+  expect(dateButtons).toHaveLength(1)
+  expect(dateButtons[0]).toHaveTextContent(/November 9/)
 })

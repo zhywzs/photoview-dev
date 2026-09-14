@@ -60,6 +60,15 @@ export interface searchQuery_search_media {
   album: searchQuery_search_media_album;
 }
 
+export interface searchQuery_search_faceGroups {
+  __typename: "FaceGroup";
+  id: string;
+  /**
+   * The name of the person
+   */
+  label: string | null;
+}
+
 export interface searchQuery_search {
   __typename: "SearchResult";
   /**
@@ -74,11 +83,15 @@ export interface searchQuery_search {
    * A list of media that matched the query
    */
   media: searchQuery_search_media[];
+  /**
+   * A list of face groups whose label matched the query
+   */
+  faceGroups: searchQuery_search_faceGroups[];
 }
 
 export interface searchQuery {
   /**
-   * Perform a search query on the contents of the media library
+   * Perform a search query on the contents of the media library. Matches file names, paths, EXIF metadata (camera, maker, lens, description) and face group labels.
    */
   search: searchQuery_search;
 }

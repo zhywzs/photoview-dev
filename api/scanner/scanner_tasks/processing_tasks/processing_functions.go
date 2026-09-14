@@ -56,9 +56,21 @@ func generateSaveHighResJPEG(tx *gorm.DB, media *models.Media, imageData *media_
 }
 
 func generateSaveThumbnailJPEG(tx *gorm.DB, media *models.Media, thumbnailName string, photoCachePath string, baseImagePath string, mediaURL *models.MediaURL) (*models.MediaURL, error) {
+	return generateSaveScaledThumbnailJPEG(tx, media, thumbnailName, photoCachePath, baseImagePath, mediaURL, models.PhotoThumbnail, 1024)
+}
+
+func generateSaveSmallThumbnailJPEG(tx *gorm.DB, media *models.Media, thumbnailName string, photoCachePath string, baseImagePath string, mediaURL *models.MediaURL) (*models.MediaURL, error) {
+	return generateSaveScaledThumbnailJPEG(tx, media, thumbnailName, photoCachePath, baseImagePath, mediaURL, models.PhotoThumbnailSmall, 256)
+}
+
+func generateSaveTinyThumbnailJPEG(tx *gorm.DB, media *models.Media, thumbnailName string, photoCachePath string, baseImagePath string, mediaURL *models.MediaURL) (*models.MediaURL, error) {
+	return generateSaveScaledThumbnailJPEG(tx, media, thumbnailName, photoCachePath, baseImagePath, mediaURL, models.PhotoThumbnailTiny, 128)
+}
+
+func generateSaveScaledThumbnailJPEG(tx *gorm.DB, media *models.Media, thumbnailName string, photoCachePath string, baseImagePath string, mediaURL *models.MediaURL, purpose models.MediaPurpose, maxSize int) (*models.MediaURL, error) {
 	thumbOutputPath := path.Join(photoCachePath, thumbnailName)
 
-	thumbSize, err := media_encoding.EncodeThumbnail(tx, baseImagePath, thumbOutputPath)
+	thumbSize, err := media_encoding.EncodeThumbnailWithSize(baseImagePath, thumbOutputPath, maxSize)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not create thumbnail cached image")
 	}
@@ -75,7 +87,7 @@ func generateSaveThumbnailJPEG(tx *gorm.DB, media *models.Media, thumbnailName s
 			MediaName:   thumbnailName,
 			Width:       thumbSize.Width,
 			Height:      thumbSize.Height,
-			Purpose:     models.PhotoThumbnail,
+			Purpose:     purpose,
 			ContentType: "image/jpeg",
 			FileSize:    fileStats.Size(),
 		}

@@ -7,6 +7,7 @@ package resolvers
 
 import (
 	"context"
+	"time"
 
 	"github.com/photoview/photoview/api/graphql/auth"
 	"github.com/photoview/photoview/api/graphql/models"
@@ -21,4 +22,14 @@ func (r *queryResolver) Search(ctx context.Context, query string, limitMedia *in
 	}
 
 	return actions.Search(r.DB(ctx), query, user.ID, limitMedia, limitAlbums)
+}
+
+// FilterMedia is the resolver for the filterMedia field.
+func (r *queryResolver) FilterMedia(ctx context.Context, query *string, dateFrom *time.Time, dateTo *time.Time, location *models.GeoBoundingBox, onlyFavorites *bool, order *models.Ordering, paginate *models.Pagination) ([]*models.Media, error) {
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return nil, auth.ErrUnauthorized
+	}
+
+	return actions.FilterMedia(r.DB(ctx), user, query, dateFrom, dateTo, location, onlyFavorites, order, paginate)
 }

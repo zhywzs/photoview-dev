@@ -94,6 +94,16 @@ func (t SidecarTask) ProcessMedia(ctx scanner_task.TaskContext, mediaData *media
 		return []*models.MediaURL{}, errors.Wrap(err, "sidecar task, get high-res media_url")
 	}
 
+	thumbSmallURL, err := photo.GetThumbnailSmall()
+	if err != nil {
+		return []*models.MediaURL{}, errors.Wrap(err, "sidecar task, get small thumbnail media_url")
+	}
+
+	thumbTinyURL, err := photo.GetThumbnailTiny()
+	if err != nil {
+		return []*models.MediaURL{}, errors.Wrap(err, "sidecar task, get tiny thumbnail media_url")
+	}
+
 	// update high res image may be cropped so dimentions and file size can change
 	baseImagePath := path.Join(mediaCachePath, highResURL.MediaName) // update base image path for thumbnail
 	tempHighResPath := baseImagePath + ".hold"
@@ -116,6 +126,34 @@ func (t SidecarTask) ProcessMedia(ctx scanner_task.TaskContext, mediaData *media
 	}
 	os.Remove(tempThumbPath)
 
+	// update small thumbnail as well, since the crop may have changed
+	var updatedSmallThumbnail *models.MediaURL
+	if thumbSmallURL != nil {
+		smallThumbPath := path.Join(mediaCachePath, thumbSmallURL.MediaName)
+		tempSmallThumbPath := smallThumbPath + ".hold"
+		os.Rename(smallThumbPath, tempSmallThumbPath)
+		updatedSmallThumbnail, err = generateSaveSmallThumbnailJPEG(ctx.GetDB(), photo, thumbSmallURL.MediaName, mediaCachePath, baseImagePath, thumbSmallURL)
+		if err != nil {
+			os.Rename(tempSmallThumbPath, smallThumbPath)
+			return []*models.MediaURL{}, errors.Wrap(err, "recreating small thumbnail cached image")
+		}
+		os.Remove(tempSmallThumbPath)
+	}
+
+	// update tiny thumbnail as well, since the crop may have changed
+	var updatedTinyThumbnail *models.MediaURL
+	if thumbTinyURL != nil {
+		tinyThumbPath := path.Join(mediaCachePath, thumbTinyURL.MediaName)
+		tempTinyThumbPath := tinyThumbPath + ".hold"
+		os.Rename(tinyThumbPath, tempTinyThumbPath)
+		updatedTinyThumbnail, err = generateSaveTinyThumbnailJPEG(ctx.GetDB(), photo, thumbTinyURL.MediaName, mediaCachePath, baseImagePath, thumbTinyURL)
+		if err != nil {
+			os.Rename(tempTinyThumbPath, tinyThumbPath)
+			return []*models.MediaURL{}, errors.Wrap(err, "recreating tiny thumbnail cached image")
+		}
+		os.Remove(tempTinyThumbPath)
+	}
+
 	photo.SideCarHash = currentFileHash
 	photo.SideCarPath = currentSideCarPath
 
@@ -124,10 +162,18 @@ func (t SidecarTask) ProcessMedia(ctx scanner_task.TaskContext, mediaData *media
 		return []*models.MediaURL{}, errors.Wrapf(err, "could not update side car hash for media: %s", photo.Path)
 	}
 
-	return []*models.MediaURL{
+	updatedList := []*models.MediaURL{
 		updatedThumbnail,
 		updatedHighRes,
-	}, nil
+	}
+	if updatedSmallThumbnail != nil {
+		updatedList = append(updatedList, updatedSmallThumbnail)
+	}
+	if updatedTinyThumbnail != nil {
+		updatedList = append(updatedList, updatedTinyThumbnail)
+	}
+
+	return updatedList, nil
 }
 
 func scanForSideCarFile(path string) *string {

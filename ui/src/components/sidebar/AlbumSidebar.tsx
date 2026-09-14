@@ -9,6 +9,7 @@ import {
 } from './__generated__/getAlbumSidebar'
 import { SidebarAlbumCover } from './AlbumCovers'
 import SidebarAlbumDownload from './SidebarDownloadAlbum'
+import { SidebarAlbumRename } from './AlbumRename'
 
 const albumQuery = gql`
   query getAlbumSidebar($id: ID!) {
@@ -44,6 +45,12 @@ const AlbumSidebar = ({ albumId }: AlbumSidebarProps) => {
           t('sidebar.album.title_placeholder', 'Album title')
         }
       />
+      <div className="mt-8">
+        <SidebarAlbumRename
+          albumId={albumId}
+          albumTitle={data?.album.title ?? ''}
+        />
+      </div>
       <div className="mt-8">
         {/* <h1 className="text-3xl font-semibold">{data.album.title}</h1> */}
         <SidebarAlbumShare id={albumId} />

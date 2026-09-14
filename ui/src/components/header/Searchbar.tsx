@@ -3,12 +3,13 @@ import styled from 'styled-components'
 import { useLazyQuery, gql } from '@apollo/client'
 import { debounce, DebouncedFn } from '../../helpers/utils'
 import { ProtectedImage } from '../photoGallery/ProtectedMedia'
-import { NavLink, useNavigate, useLocation } from 'react-router-dom'
+import { NavLink, Link, useNavigate, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   searchQuery,
   searchQuery_search_albums,
   searchQuery_search_media,
+  searchQuery_search_faceGroups,
 } from './__generated__/searchQuery'
 import classNames from 'classnames'
 
@@ -35,21 +36,41 @@ const SEARCH_QUERY = gql`
           id
         }
       }
+      faceGroups {
+        id
+        label
+      }
     }
   }
 `
 
-const SearchWrapper = styled.div.attrs({
-  className: 'w-full max-w-xs lg:relative',
-})``
+const SearchWrapper = styled.div`
+  width: 100%;
+  max-width: 20rem;
 
-const SearchBar = () => {
+  @media (min-width: 1024px) {
+    position: relative;
+  }
+`
+
+type SearchBarProps = {
+  autoFocusMobile?: boolean
+  onCloseMobile?(): void
+}
+
+const SearchBar = ({ autoFocusMobile, onCloseMobile }: SearchBarProps) => {
   const { t } = useTranslation()
   const [fetchSearches, fetchResult] = useLazyQuery<searchQuery>(SEARCH_QUERY)
   const [query, setQuery] = useState('')
   const [fetched, setFetched] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const inputEl = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (autoFocusMobile && inputEl.current) {
+      inputEl.current.focus()
+    }
+  }, [autoFocusMobile])
 
   type QueryFn = (query: string) => void
 
@@ -88,9 +109,11 @@ const SearchBar = () => {
   const searchData = fetchResult.data
   let media = searchData?.search.media || []
   let albums = searchData?.search.albums || []
+  let faceGroups = searchData?.search.faceGroups || []
 
   albums = albums.slice(0, 5)
   media = media.slice(0, 5)
+  faceGroups = faceGroups.slice(0, 5)
 
   const selectedItemId =
     selectedItem !== null
@@ -153,6 +176,7 @@ const SearchBar = () => {
       <SearchResults
         albums={albums}
         media={media}
+        faceGroups={faceGroups}
         query={fetchResult.data?.search.query || ''}
         selectedItem={selectedItem}
         setSelectedItem={setSelectedItem}
@@ -163,7 +187,7 @@ const SearchBar = () => {
   }
 
   return (
-    <SearchWrapper>
+    <SearchWrapper style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
       <input
         ref={inputEl}
         autoComplete="off"
@@ -174,12 +198,30 @@ const SearchBar = () => {
           selectedItemId ? `search-item-${selectedItemId}` : ''
         }
         aria-expanded={expanded}
-        className="w-full py-2 px-3 z-10 relative rounded-md bg-gray-50 focus:bg-white border border-gray-50 focus:border-blue-400 outline-none focus:ring-2 focus:ring-blue-400 focus:ring-opacity-50 dark:bg-dark-bg2 dark:border-dark-bg2 dark:focus:bg-[#2a2f35]"
+        className="w-full py-2 px-3 z-10 relative rounded-full bg-gray-100 dark:bg-dark-bg2 border border-transparent focus:bg-white focus:border-blue-400 outline-none focus:ring-2 focus:ring-blue-400 focus:ring-opacity-50 dark:focus:bg-[#2a2f35]"
         type="search"
         placeholder={t('header.search.placeholder', 'Search')}
         onChange={fetchEvent}
         value={query}
       />
+      {onCloseMobile && query == '' && (
+        <button
+          className="lg:hidden w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-gray-500 dark:text-gray-300"
+          aria-label={t('header.search.close', 'Close search')}
+          onClick={onCloseMobile}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <line x1="6" y1="6" x2="18" y2="18" />
+            <line x1="18" y1="6" x2="6" y2="18" />
+          </svg>
+        </button>
+      )}
       {results}
     </SearchWrapper>
   )
@@ -193,6 +235,7 @@ const ResultTitle = styled.h1.attrs({
 type SearchResultsProps = {
   albums: searchQuery_search_albums[]
   media: searchQuery_search_media[]
+  faceGroups: searchQuery_search_faceGroups[]
   loading: boolean
   selectedItem: number | null
   setSelectedItem: React.Dispatch<React.SetStateAction<number | null>>
@@ -203,6 +246,7 @@ type SearchResultsProps = {
 const SearchResults = ({
   albums,
   media,
+  faceGroups,
   loading,
   selectedItem,
   setSelectedItem,
@@ -221,19 +265,34 @@ const SearchResults = ({
     />
   ))
 
-  const mediaElements = media.map((media, i) => (
-    <PhotoRow
-      key={media.id}
-      query={query}
-      media={media}
+  const faceGroupElements = faceGroups.map((faceGroup, i) => (
+    <FaceGroupRow
+      key={faceGroup.id}
+      faceGroup={faceGroup}
       selected={selectedItem == i + albumElements.length}
       setSelected={() => setSelectedItem(i + albumElements.length)}
     />
   ))
 
+  const mediaStartIndex = albumElements.length + faceGroupElements.length
+
+  const mediaElements = media.map((media, i) => (
+    <PhotoRow
+      key={media.id}
+      query={query}
+      media={media}
+      selected={selectedItem == i + mediaStartIndex}
+      setSelected={() => setSelectedItem(i + mediaStartIndex)}
+    />
+  ))
+
   let message = null
   if (loading) message = t('header.search.loading', 'Loading results...')
-  else if (media.length == 0 && albums.length == 0)
+  else if (
+    media.length == 0 &&
+    albums.length == 0 &&
+    faceGroups.length == 0
+  )
     message = t('header.search.no_results', 'No results found')
 
   if (message) message = <div className="mt-8 text-center">{message}</div>
@@ -262,6 +321,14 @@ const SearchResults = ({
           <ul aria-label="albums">{albumElements}</ul>
         </>
       )}
+      {faceGroupElements.length > 0 && (
+        <>
+          <ResultTitle>
+            {t('header.search.result_type.people', 'People')}
+          </ResultTitle>
+          <ul aria-label="faceGroups">{faceGroupElements}</ul>
+        </>
+      )}
       {mediaElements.length > 0 && (
         <>
           <ResultTitle>
@@ -270,6 +337,14 @@ const SearchResults = ({
           <ul aria-label="media">{mediaElements}</ul>
         </>
       )}
+      <div className="my-3 text-center">
+        <Link
+          to={`/search?query=${encodeURIComponent(query)}`}
+          className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+        >
+          {t('header.search.view_all_results', 'View all results »')}
+        </Link>
+      </div>
     </div>
   )
 }
@@ -374,6 +449,34 @@ const AlbumRow = ({ query, album, selected, setSelected }: AlbumRowArgs) => (
       />
     }
     label={searchHighlighted(query, album.title)}
+    selected={selected}
+    setSelected={setSelected}
+  />
+)
+
+type FaceGroupRowArgs = {
+  faceGroup: searchQuery_search_faceGroups
+  selected: boolean
+  setSelected(): void
+}
+
+const FaceGroupRow = ({ faceGroup, selected, setSelected }: FaceGroupRowArgs) => (
+  <SearchRow
+    key={faceGroup.id}
+    id={`face-${faceGroup.id}`}
+    link={`/people/${faceGroup.id}`}
+    preview={
+      <div className="w-14 h-14 rounded-full bg-gray-200 dark:bg-dark-bg2 flex items-center justify-center">
+        <svg
+          viewBox="0 0 24 24"
+          className="w-8 h-8 text-gray-500 dark:text-gray-400"
+          fill="currentColor"
+        >
+          <path d="M15.713873,14.2127622 C17.4283917,14.8986066 18.9087267,16.0457918 20.0014344,17.5008819 C20,19.1568542 18.6568542,20.5 17,20.5 L7,20.5 C5.34314575,20.5 4,19.1568542 4,17.5 L4.09169034,17.3788798 C5.17486154,15.981491 6.62020934,14.878942 8.28693513,14.2120314 C9.30685583,15.018595 10.5972088,15.5 12,15.5 C13.3092718,15.5 14.5205974,15.0806428 15.5069849,14.3689203 L15.713873,14.2127622 L15.713873,14.2127622 Z M12,4 C15.0375661,4 17.5,6.46243388 17.5,9.5 C17.5,12.5375661 15.0375661,15 12,15 C8.96243388,15 6.5,12.5375661 6.5,9.5 C6.5,6.46243388 8.96243388,4 12,4 Z"></path>
+        </svg>
+      </div>
+    }
+    label={<span>{faceGroup.label ?? ''}</span>}
     selected={selected}
     setSelected={setSelected}
   />

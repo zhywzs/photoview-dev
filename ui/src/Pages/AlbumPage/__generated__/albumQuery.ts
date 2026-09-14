@@ -52,6 +52,38 @@ export interface albumQuery_album_media_thumbnail {
   height: number;
 }
 
+export interface albumQuery_album_media_thumbnailSmall {
+  __typename: "MediaURL";
+  /**
+   * URL for previewing the image
+   */
+  url: string;
+  /**
+   * Width of the image in pixels
+   */
+  width: number;
+  /**
+   * Height of the image in pixels
+   */
+  height: number;
+}
+
+export interface albumQuery_album_media_thumbnailTiny {
+  __typename: "MediaURL";
+  /**
+   * URL for previewing the image
+   */
+  url: string;
+  /**
+   * Width of the image in pixels
+   */
+  width: number;
+  /**
+   * Height of the image in pixels
+   */
+  height: number;
+}
+
 export interface albumQuery_album_media_highRes {
   __typename: "MediaURL";
   /**
@@ -72,6 +104,7 @@ export interface albumQuery_album_media {
   __typename: "Media";
   id: string;
   type: MediaType;
+  title: string;
   /**
    * A short string that can be used to generate a blured version of the media, to show while the original is loading
    */
@@ -80,6 +113,14 @@ export interface albumQuery_album_media {
    * URL to display the media in a smaller resolution
    */
   thumbnail: albumQuery_album_media_thumbnail | null;
+  /**
+   * URL to display the media in a small resolution (max 256px), used for zoomed out gallery views
+   */
+  thumbnailSmall: albumQuery_album_media_thumbnailSmall | null;
+  /**
+   * URL to display the media in a tiny resolution (max 128px), used for ultra dense gallery views
+   */
+  thumbnailTiny: albumQuery_album_media_thumbnailTiny | null;
   /**
    * URL to display the photo in full resolution, will be null for videos
    */

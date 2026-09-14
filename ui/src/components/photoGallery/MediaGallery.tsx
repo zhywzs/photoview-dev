@@ -1,6 +1,6 @@
-import React, { useContext } from 'react'
-import styled from 'styled-components'
-import { MediaThumbnail, MediaPlaceholder } from './MediaThumbnail'
+import React, { useCallback, useContext } from 'react'
+import { gql } from '@apollo/client'
+import PhotoGrid from '../photoGrid/PhotoGrid'
 import PresentView from './presentView/PresentView'
 import {
   openPresentModeAction,
@@ -13,33 +13,25 @@ import {
 } from './photoGalleryMutations'
 import MediaSidebar from '../sidebar/MediaSidebar/MediaSidebar'
 import { SidebarContext } from '../sidebar/Sidebar'
-import { gql } from '@apollo/client'
-
-const Gallery = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  min-height: 200px;
-  position: relative;
-  margin: -4px;
-
-  @media (max-width: 1000px) {
-    /* Compensate for tab bar on mobile */
-    margin-bottom: 76px;
-  }
-`
-
-export const PhotoFiller = styled.div`
-  height: 200px;
-  flex-grow: 999999;
-`
+import { MediaGalleryFields } from './__generated__/MediaGalleryFields'
 
 export const MEDIA_GALLERY_FRAGMENT = gql`
   fragment MediaGalleryFields on Media {
     id
     type
+    title
     blurhash
     thumbnail {
+      url
+      width
+      height
+    }
+    thumbnailSmall {
+      url
+      width
+      height
+    }
+    thumbnailTiny {
       url
       width
       height
@@ -67,51 +59,52 @@ const MediaGallery = ({ mediaState, dispatchMedia }: MediaGalleryProps) => {
 
   const { updateSidebar } = useContext(SidebarContext)
 
-  let mediaElements = []
-  if (media) {
-    mediaElements = media.map((media, index) => {
-      const active = activeIndex == index
+  const onItemActivate = useCallback(
+    (item: MediaGalleryFields, index: number) => {
+      openPresentModeAction({ dispatchMedia, activeIndex: index })
+    },
+    [dispatchMedia]
+  )
 
-      return (
-        <MediaThumbnail
-          key={media.id}
-          media={media}
-          active={active}
-          selectImage={() => {
-            dispatchMedia({
-              type: 'selectImage',
-              index,
-            })
-            updateSidebar(<MediaSidebar media={mediaState.media[index]} />)
-          }}
-          clickFavorite={() => {
-            toggleFavoriteAction({
-              media,
-              markFavorite,
-            })
-          }}
-          clickPresent={() => {
-            openPresentModeAction({ dispatchMedia, activeIndex: index })
-          }}
-        />
-      )
-    })
-  } else {
-    for (let i = 0; i < 6; i++) {
-      mediaElements.push(<MediaPlaceholder key={i} />)
-    }
-  }
+  const onItemFavorite = useCallback(
+    (item: MediaGalleryFields) => {
+      toggleFavoriteAction({ media: item, markFavorite })
+    },
+    [markFavorite]
+  )
+
+  const onItemSelect = useCallback(
+    (item: MediaGalleryFields, index: number) => {
+      dispatchMedia({ type: 'selectImage', index })
+      updateSidebar(<MediaSidebar media={item} />)
+    },
+    [dispatchMedia, updateSidebar]
+  )
+
+  const activeMedia = activeIndex >= 0 ? media[activeIndex] : undefined
 
   return (
     <>
-      <Gallery data-testid="photo-gallery-wrapper">
-        {mediaElements}
-        <PhotoFiller />
-      </Gallery>
-      {presenting && (
+      <div data-testid="photo-gallery-wrapper">
+        <PhotoGrid
+          items={media}
+          onItemActivate={onItemActivate}
+          onItemFavorite={onItemFavorite}
+          onItemSelect={onItemSelect}
+          activeId={activeMedia?.id}
+        />
+      </div>
+      {presenting && activeMedia != null && (
         <PresentView
-          activeMedia={mediaState.media[mediaState.activeIndex]}
+          activeMedia={activeMedia}
           dispatchMedia={dispatchMedia}
+          favorite={activeMedia.favorite}
+          onToggleFavorite={() => {
+            toggleFavoriteAction({ media: activeMedia, markFavorite })
+          }}
+          onToggleInfo={() => {
+            updateSidebar(<MediaSidebar media={activeMedia} />)
+          }}
         />
       )}
     </>

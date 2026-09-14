@@ -21,8 +21,8 @@ type Dimension struct {
 	Height int
 }
 
-// ThumbnailScale generates a new dimension for thumbnails.
-func (d *Dimension) ThumbnailScale() Dimension {
+// ScaleToFit generates a new dimension scaled so the longest side is maxSize.
+func (d *Dimension) ScaleToFit(maxSize int) Dimension {
 	if d.Height == 0 || d.Width == 0 {
 		return Dimension{Width: 0, Height: 0}
 	}
@@ -32,11 +32,11 @@ func (d *Dimension) ThumbnailScale() Dimension {
 	var width, height int
 
 	if aspect > 1 {
-		width = 1024
-		height = int(1024 / aspect)
+		width = maxSize
+		height = int(float64(maxSize) / aspect)
 	} else {
-		width = int(1024 * aspect)
-		height = 1024
+		width = int(float64(maxSize) * aspect)
+		height = maxSize
 	}
 
 	if width > d.Width {
@@ -48,6 +48,16 @@ func (d *Dimension) ThumbnailScale() Dimension {
 		Width:  width,
 		Height: height,
 	}
+}
+
+// ThumbnailScale generates a new dimension for thumbnails (max 1024).
+func (d *Dimension) ThumbnailScale() Dimension {
+	return d.ScaleToFit(1024)
+}
+
+// ThumbnailSmallScale generates a new dimension for small thumbnails (max 256).
+func (d *Dimension) ThumbnailSmallScale() Dimension {
+	return d.ScaleToFit(256)
 }
 
 // GetPhotoDimensions returns the dimension of the image `imagePath`.
@@ -66,6 +76,23 @@ func GetPhotoDimensions(imagePath string) (Dimension, error) {
 // EncodeThumbnail encodes a thumbnail of `inputPath`, and store it as `outputPath`.
 // It returns the dimension of the thumbnail. The thumbnail will be not bigger than 1024x1024.
 func EncodeThumbnail(db *gorm.DB, inputPath string, outputPath string) (Dimension, error) {
+	return EncodeThumbnailWithSize(inputPath, outputPath, 1024)
+}
+
+// EncodeThumbnailSmall encodes a small thumbnail of `inputPath` (max 256x256).
+func EncodeThumbnailSmall(inputPath string, outputPath string) (Dimension, error) {
+	return EncodeThumbnailWithSize(inputPath, outputPath, 256)
+}
+
+// EncodeThumbnailTiny encodes a tiny thumbnail of `inputPath` (max 128x128).
+func EncodeThumbnailTiny(inputPath string, outputPath string) (Dimension, error) {
+	return EncodeThumbnailWithSize(inputPath, outputPath, 128)
+}
+
+// EncodeThumbnailWithSize encodes a thumbnail of `inputPath` scaled so the
+// longest side is at most `maxSize`, and stores it as `outputPath`.
+// It returns the actual dimension of the encoded thumbnail.
+func EncodeThumbnailWithSize(inputPath string, outputPath string, maxSize int) (Dimension, error) {
 	w, h, err := executable_worker.Magick.IdentifyDimension(inputPath)
 	if err != nil {
 		return Dimension{}, fmt.Errorf("can't generate thumbnail of file %q: %w", inputPath, err)
@@ -75,7 +102,7 @@ func EncodeThumbnail(db *gorm.DB, inputPath string, outputPath string) (Dimensio
 		Width:  int(w),
 		Height: int(h),
 	}
-	thumbnail := origin.ThumbnailScale()
+	thumbnail := origin.ScaleToFit(maxSize)
 
 	if err := executable_worker.Magick.GenerateThumbnail(inputPath, outputPath, uint(thumbnail.Width), uint(thumbnail.Height)); err != nil {
 		return Dimension{}, fmt.Errorf("can't generate thumbnail of file %q: %w", inputPath, err)

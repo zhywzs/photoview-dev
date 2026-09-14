@@ -25,6 +25,14 @@ type Coordinates struct {
 	Longitude float64 `json:"longitude"`
 }
 
+// Geographic bounding box used to filter media by location
+type GeoBoundingBox struct {
+	MinLatitude  float64 `json:"minLatitude"`
+	MaxLatitude  float64 `json:"maxLatitude"`
+	MinLongitude float64 `json:"minLongitude"`
+	MaxLongitude float64 `json:"maxLongitude"`
+}
+
 type MediaDownload struct {
 	// A description of the role of the media file
 	Title    string    `json:"title"`
@@ -84,6 +92,8 @@ type SearchResult struct {
 	Albums []*Album `json:"albums"`
 	// A list of media that matched the query
 	Media []*Media `json:"media"`
+	// A list of face groups whose label matched the query
+	FaceGroups []*FaceGroup `json:"faceGroups"`
 }
 
 // Credentials used to identify and authenticate a share token

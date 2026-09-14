@@ -15,11 +15,11 @@ import (
 )
 
 // MyTimeline is the resolver for the myTimeline field.
-func (r *queryResolver) MyTimeline(ctx context.Context, paginate *models.Pagination, onlyFavorites *bool, fromDate *time.Time) ([]*models.Media, error) {
+func (r *queryResolver) MyTimeline(ctx context.Context, paginate *models.Pagination, onlyFavorites *bool, fromDate *time.Time, toDate *time.Time) ([]*models.Media, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
 		return nil, auth.ErrUnauthorized
 	}
 
-	return actions.MyTimeline(r.DB(ctx), user, paginate, onlyFavorites, fromDate)
+	return actions.MyTimeline(r.DB(ctx), user, paginate, onlyFavorites, fromDate, toDate)
 }

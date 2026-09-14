@@ -49,6 +49,16 @@ export const SHARE_ALBUM_QUERY = gql`
           width
           height
         }
+        thumbnailSmall {
+          url
+          width
+          height
+        }
+        thumbnailTiny {
+          url
+          width
+          height
+        }
         downloads {
           title
           mediaUrl {
@@ -66,6 +76,7 @@ export const SHARE_ALBUM_QUERY = gql`
         videoWeb {
           url
         }
+        favorite
         exif {
           id
           description

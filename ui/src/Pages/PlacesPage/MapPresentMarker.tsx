@@ -21,6 +21,16 @@ const QUERY_MEDIA = gql`
         width
         height
       }
+      thumbnailSmall {
+        url
+        width
+        height
+      }
+      thumbnailTiny {
+        url
+        width
+        height
+      }
       highRes {
         url
         width
@@ -31,6 +41,7 @@ const QUERY_MEDIA = gql`
         width
         height
       }
+      favorite
       type
     }
   }

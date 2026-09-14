@@ -39,6 +39,18 @@ func (t ProcessPhotoTask) ProcessMedia(ctx scanner_task.TaskContext, mediaData *
 		return []*models.MediaURL{}, errors.Wrap(err, "error processing photo thumbnail")
 	}
 
+	// Small thumbnail
+	thumbSmallURL, err := photoURLFromDB(models.PhotoThumbnailSmall)
+	if err != nil {
+		return []*models.MediaURL{}, errors.Wrap(err, "error processing photo small thumbnail")
+	}
+
+	// Tiny thumbnail
+	thumbTinyURL, err := photoURLFromDB(models.PhotoThumbnailTiny)
+	if err != nil {
+		return []*models.MediaURL{}, errors.Wrap(err, "error processing photo tiny thumbnail")
+	}
+
 	// Highres
 	highResURL, err := photoURLFromDB(models.PhotoHighRes)
 	if err != nil {
@@ -118,6 +130,54 @@ func (t ProcessPhotoTask) ProcessMedia(ctx scanner_task.TaskContext, mediaData *
 			_, err := media_encoding.EncodeThumbnail(ctx.GetDB(), baseImagePath, thumbPath)
 			if err != nil {
 				return []*models.MediaURL{}, errors.Wrap(err, "could not create thumbnail cached image")
+			}
+		}
+	}
+
+	// Save small thumbnail (max 256px) to cache, used by zoomed-out gallery views
+	if thumbSmallURL == nil {
+		smallName := generateUniqueMediaNamePrefixed("thumbnail_small", photo.Path, ".jpg")
+		smallThumb, err := generateSaveSmallThumbnailJPEG(ctx.GetDB(), photo, smallName, mediaCachePath, baseImagePath, nil)
+		if err != nil {
+			return []*models.MediaURL{}, err
+		}
+
+		updatedURLs = append(updatedURLs, smallThumb)
+	} else {
+		// Verify that small thumbnail still exists in cache
+		smallThumbPath := path.Join(mediaCachePath, thumbSmallURL.MediaName)
+
+		if _, err := os.Stat(smallThumbPath); os.IsNotExist(err) {
+			updatedURLs = append(updatedURLs, thumbSmallURL)
+			log.Info(ctx, "Small thumbnail photo found in database but not in cache, re-encoding photo to cache", "media_name", thumbSmallURL.MediaName)
+
+			_, err := media_encoding.EncodeThumbnailSmall(baseImagePath, smallThumbPath)
+			if err != nil {
+				return []*models.MediaURL{}, errors.Wrap(err, "could not create small thumbnail cached image")
+			}
+		}
+	}
+
+	// Save tiny thumbnail (max 128px) to cache, used by ultra dense gallery views
+	if thumbTinyURL == nil {
+		tinyName := generateUniqueMediaNamePrefixed("thumbnail_tiny", photo.Path, ".jpg")
+		tinyThumb, err := generateSaveTinyThumbnailJPEG(ctx.GetDB(), photo, tinyName, mediaCachePath, baseImagePath, nil)
+		if err != nil {
+			return []*models.MediaURL{}, err
+		}
+
+		updatedURLs = append(updatedURLs, tinyThumb)
+	} else {
+		// Verify that tiny thumbnail still exists in cache
+		tinyThumbPath := path.Join(mediaCachePath, thumbTinyURL.MediaName)
+
+		if _, err := os.Stat(tinyThumbPath); os.IsNotExist(err) {
+			updatedURLs = append(updatedURLs, thumbTinyURL)
+			log.Info(ctx, "Tiny thumbnail photo found in database but not in cache, re-encoding photo to cache", "media_name", thumbTinyURL.MediaName)
+
+			_, err := media_encoding.EncodeThumbnailTiny(baseImagePath, tinyThumbPath)
+			if err != nil {
+				return []*models.MediaURL{}, errors.Wrap(err, "could not create tiny thumbnail cached image")
 			}
 		}
 	}

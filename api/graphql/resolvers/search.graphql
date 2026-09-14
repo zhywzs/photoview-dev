@@ -5,9 +5,38 @@ type SearchResult {
   albums: [Album!]!
   "A list of media that matched the query"
   media: [Media!]!
+  "A list of face groups whose label matched the query"
+  faceGroups: [FaceGroup!]!
+}
+
+"Geographic bounding box used to filter media by location"
+input GeoBoundingBox {
+  minLatitude: Float!
+  maxLatitude: Float!
+  minLongitude: Float!
+  maxLongitude: Float!
 }
 
 extend type Query {
-  "Perform a search query on the contents of the media library"
+  "Perform a search query on the contents of the media library. Matches file names, paths, EXIF metadata (camera, maker, lens, description) and face group labels."
   search(query: String!, limitMedia: Int, limitAlbums: Int): SearchResult!
+
+  """
+  Filter media by text, date range, geographic bounding box and favorites.
+  Results are ordered by date shot, newest first, unless another order is given.
+  """
+  filterMedia(
+    "Free text query, matches file names, paths, EXIF metadata and face group labels"
+    query: String
+    "Only return media shot on or after this date"
+    dateFrom: Time
+    "Only return media shot on or before this date"
+    dateTo: Time
+    "Only return media with GPS coordinates inside this bounding box"
+    location: GeoBoundingBox
+    "Only return favorited media"
+    onlyFavorites: Boolean
+    order: Ordering
+    paginate: Pagination
+  ): [Media!]! @isAuthorized
 }

@@ -51,9 +51,10 @@ test('Layout sidebar component', async () => {
     </MockedProvider>
   )
 
-  expect(screen.getByText('Timeline')).toBeInTheDocument()
-  expect(screen.getByText('Albums')).toBeInTheDocument()
+  // labels render for both the mobile and the desktop navigation
+  expect(screen.getAllByText('Timeline').length).toBeGreaterThan(0)
+  expect(screen.getAllByText('Albums').length).toBeGreaterThan(0)
 
-  expect(await screen.findByText('Settings')).toBeInTheDocument()
-  expect(await screen.findByText('Places')).toBeInTheDocument()
+  expect((await screen.findAllByText('Settings')).length).toBeGreaterThan(0)
+  expect((await screen.findAllByText('Places')).length).toBeGreaterThan(0)
 })

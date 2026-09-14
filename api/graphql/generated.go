@@ -94,22 +94,24 @@ type ComplexityRoot struct {
 	}
 
 	Media struct {
-		Album         func(childComplexity int) int
-		Blurhash      func(childComplexity int) int
-		Date          func(childComplexity int) int
-		Downloads     func(childComplexity int) int
-		Exif          func(childComplexity int) int
-		Faces         func(childComplexity int) int
-		Favorite      func(childComplexity int) int
-		HighRes       func(childComplexity int) int
-		ID            func(childComplexity int) int
-		Path          func(childComplexity int) int
-		Shares        func(childComplexity int) int
-		Thumbnail     func(childComplexity int) int
-		Title         func(childComplexity int) int
-		Type          func(childComplexity int) int
-		VideoMetadata func(childComplexity int) int
-		VideoWeb      func(childComplexity int) int
+		Album          func(childComplexity int) int
+		Blurhash       func(childComplexity int) int
+		Date           func(childComplexity int) int
+		Downloads      func(childComplexity int) int
+		Exif           func(childComplexity int) int
+		Faces          func(childComplexity int) int
+		Favorite       func(childComplexity int) int
+		HighRes        func(childComplexity int) int
+		ID             func(childComplexity int) int
+		Path           func(childComplexity int) int
+		Shares         func(childComplexity int) int
+		Thumbnail      func(childComplexity int) int
+		ThumbnailSmall func(childComplexity int) int
+		ThumbnailTiny  func(childComplexity int) int
+		Title          func(childComplexity int) int
+		Type           func(childComplexity int) int
+		VideoMetadata  func(childComplexity int) int
+		VideoWeb       func(childComplexity int) int
 	}
 
 	MediaDownload struct {
@@ -158,6 +160,7 @@ type ComplexityRoot struct {
 		ScanAll                     func(childComplexity int) int
 		ScanUser                    func(childComplexity int, userID int) int
 		SetAlbumCover               func(childComplexity int, coverID int) int
+		SetAlbumTitle               func(childComplexity int, albumID int, title string) int
 		SetExpireShareToken         func(childComplexity int, token string, expire *time.Time) int
 		SetFaceGroupLabel           func(childComplexity int, faceGroupID int, label *string) int
 		SetPeriodicScanInterval     func(childComplexity int, interval int) int
@@ -184,6 +187,7 @@ type ComplexityRoot struct {
 	Query struct {
 		Album                      func(childComplexity int, id int, tokenCredentials *models.ShareTokenCredentials) int
 		FaceGroup                  func(childComplexity int, id int) int
+		FilterMedia                func(childComplexity int, query *string, dateFrom *time.Time, dateTo *time.Time, location *models.GeoBoundingBox, onlyFavorites *bool, order *models.Ordering, paginate *models.Pagination) int
 		MapboxToken                func(childComplexity int) int
 		Media                      func(childComplexity int, id int, tokenCredentials *models.ShareTokenCredentials) int
 		MediaList                  func(childComplexity int, ids []int) int
@@ -191,7 +195,7 @@ type ComplexityRoot struct {
 		MyFaceGroups               func(childComplexity int, paginate *models.Pagination) int
 		MyMedia                    func(childComplexity int, order *models.Ordering, paginate *models.Pagination) int
 		MyMediaGeoJSON             func(childComplexity int) int
-		MyTimeline                 func(childComplexity int, paginate *models.Pagination, onlyFavorites *bool, fromDate *time.Time) int
+		MyTimeline                 func(childComplexity int, paginate *models.Pagination, onlyFavorites *bool, fromDate *time.Time, toDate *time.Time) int
 		MyUser                     func(childComplexity int) int
 		MyUserPreferences          func(childComplexity int) int
 		Search                     func(childComplexity int, query string, limitMedia *int, limitAlbums *int) int
@@ -209,9 +213,10 @@ type ComplexityRoot struct {
 	}
 
 	SearchResult struct {
-		Albums func(childComplexity int) int
-		Media  func(childComplexity int) int
-		Query  func(childComplexity int) int
+		Albums     func(childComplexity int) int
+		FaceGroups func(childComplexity int) int
+		Media      func(childComplexity int) int
+		Query      func(childComplexity int) int
 	}
 
 	ShareToken struct {
@@ -295,6 +300,8 @@ type ImageFaceResolver interface {
 }
 type MediaResolver interface {
 	Thumbnail(ctx context.Context, obj *models.Media) (*models.MediaURL, error)
+	ThumbnailSmall(ctx context.Context, obj *models.Media) (*models.MediaURL, error)
+	ThumbnailTiny(ctx context.Context, obj *models.Media) (*models.MediaURL, error)
 	HighRes(ctx context.Context, obj *models.Media) (*models.MediaURL, error)
 	VideoWeb(ctx context.Context, obj *models.Media) (*models.MediaURL, error)
 	Album(ctx context.Context, obj *models.Media) (*models.Album, error)
@@ -310,6 +317,7 @@ type MediaResolver interface {
 type MutationResolver interface {
 	ResetAlbumCover(ctx context.Context, albumID int) (*models.Album, error)
 	SetAlbumCover(ctx context.Context, coverID int) (*models.Album, error)
+	SetAlbumTitle(ctx context.Context, albumID int, title string) (*models.Album, error)
 	SetFaceGroupLabel(ctx context.Context, faceGroupID int, label *string) (*models.FaceGroup, error)
 	CombineFaceGroups(ctx context.Context, destinationFaceGroupID int, sourceFaceGroupIDs []int) (*models.FaceGroup, error)
 	MoveImageFaces(ctx context.Context, imageFaceIDs []int, destinationFaceGroupID int) (*models.FaceGroup, error)
@@ -346,10 +354,11 @@ type QueryResolver interface {
 	MyMediaGeoJSON(ctx context.Context) (any, error)
 	MapboxToken(ctx context.Context) (*string, error)
 	Search(ctx context.Context, query string, limitMedia *int, limitAlbums *int) (*models.SearchResult, error)
+	FilterMedia(ctx context.Context, query *string, dateFrom *time.Time, dateTo *time.Time, location *models.GeoBoundingBox, onlyFavorites *bool, order *models.Ordering, paginate *models.Pagination) ([]*models.Media, error)
 	ShareToken(ctx context.Context, credentials models.ShareTokenCredentials) (*models.ShareToken, error)
 	ShareTokenValidatePassword(ctx context.Context, credentials models.ShareTokenCredentials) (bool, error)
 	SiteInfo(ctx context.Context) (*models.SiteInfo, error)
-	MyTimeline(ctx context.Context, paginate *models.Pagination, onlyFavorites *bool, fromDate *time.Time) ([]*models.Media, error)
+	MyTimeline(ctx context.Context, paginate *models.Pagination, onlyFavorites *bool, fromDate *time.Time, toDate *time.Time) ([]*models.Media, error)
 	User(ctx context.Context, order *models.Ordering, paginate *models.Pagination) ([]*models.User, error)
 	MyUser(ctx context.Context) (*models.User, error)
 	MyUserPreferences(ctx context.Context) (*models.UserPreferences, error)
@@ -643,6 +652,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Media.Thumbnail(childComplexity), true
+	case "Media.thumbnailSmall":
+		if e.ComplexityRoot.Media.ThumbnailSmall == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Media.ThumbnailSmall(childComplexity), true
+	case "Media.thumbnailTiny":
+		if e.ComplexityRoot.Media.ThumbnailTiny == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Media.ThumbnailTiny(childComplexity), true
 	case "Media.title":
 		if e.ComplexityRoot.Media.Title == nil {
 			break
@@ -957,6 +978,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.SetAlbumCover(childComplexity, args["coverID"].(int)), true
+	case "Mutation.setAlbumTitle":
+		if e.ComplexityRoot.Mutation.SetAlbumTitle == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_setAlbumTitle_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.SetAlbumTitle(childComplexity, args["albumID"].(int), args["title"].(string)), true
 	case "Mutation.setExpireShareToken":
 		if e.ComplexityRoot.Mutation.SetExpireShareToken == nil {
 			break
@@ -1139,6 +1171,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.FaceGroup(childComplexity, args["id"].(int)), true
+	case "Query.filterMedia":
+		if e.ComplexityRoot.Query.FilterMedia == nil {
+			break
+		}
+
+		args, err := ec.field_Query_filterMedia_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.FilterMedia(childComplexity, args["query"].(*string), args["dateFrom"].(*time.Time), args["dateTo"].(*time.Time), args["location"].(*models.GeoBoundingBox), args["onlyFavorites"].(*bool), args["order"].(*models.Ordering), args["paginate"].(*models.Pagination)), true
 
 	case "Query.mapboxToken":
 		if e.ComplexityRoot.Query.MapboxToken == nil {
@@ -1217,7 +1260,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.MyTimeline(childComplexity, args["paginate"].(*models.Pagination), args["onlyFavorites"].(*bool), args["fromDate"].(*time.Time)), true
+		return e.ComplexityRoot.Query.MyTimeline(childComplexity, args["paginate"].(*models.Pagination), args["onlyFavorites"].(*bool), args["fromDate"].(*time.Time), args["toDate"].(*time.Time)), true
 	case "Query.myUser":
 		if e.ComplexityRoot.Query.MyUser == nil {
 			break
@@ -1312,6 +1355,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.SearchResult.Albums(childComplexity), true
+	case "SearchResult.faceGroups":
+		if e.ComplexityRoot.SearchResult.FaceGroups == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SearchResult.FaceGroups(childComplexity), true
 	case "SearchResult.media":
 		if e.ComplexityRoot.SearchResult.Media == nil {
 			break
@@ -1544,6 +1593,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
+		ec.unmarshalInputGeoBoundingBox,
 		ec.unmarshalInputOrdering,
 		ec.unmarshalInputPagination,
 		ec.unmarshalInputShareTokenCredentials,
@@ -1769,6 +1819,10 @@ func (ec *executionContext) childFields_Media(ctx context.Context, field graphql
 		return ec.fieldContext_Media_path(ctx, field)
 	case "thumbnail":
 		return ec.fieldContext_Media_thumbnail(ctx, field)
+	case "thumbnailSmall":
+		return ec.fieldContext_Media_thumbnailSmall(ctx, field)
+	case "thumbnailTiny":
+		return ec.fieldContext_Media_thumbnailTiny(ctx, field)
 	case "highRes":
 		return ec.fieldContext_Media_highRes(ctx, field)
 	case "videoWeb":
@@ -1899,6 +1953,8 @@ func (ec *executionContext) childFields_SearchResult(ctx context.Context, field 
 		return ec.fieldContext_SearchResult_albums(ctx, field)
 	case "media":
 		return ec.fieldContext_SearchResult_media(ctx, field)
+	case "faceGroups":
+		return ec.fieldContext_SearchResult_faceGroups(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type SearchResult", field.Name)
 }
@@ -2449,6 +2505,28 @@ func (ec *executionContext) field_Mutation_setAlbumCover_args(ctx context.Contex
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_setAlbumTitle_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "albumID",
+		func(ctx context.Context, v any) (int, error) {
+			return ec.unmarshalNID2int(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["albumID"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "title",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["title"] = arg1
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_setExpireShareToken_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -2751,6 +2829,68 @@ func (ec *executionContext) field_Query_faceGroup_args(ctx context.Context, rawA
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_filterMedia_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "query",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["query"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "dateFrom",
+		func(ctx context.Context, v any) (*time.Time, error) {
+			return ec.unmarshalOTime2ᚖtimeᚐTime(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["dateFrom"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "dateTo",
+		func(ctx context.Context, v any) (*time.Time, error) {
+			return ec.unmarshalOTime2ᚖtimeᚐTime(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["dateTo"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "location",
+		func(ctx context.Context, v any) (*models.GeoBoundingBox, error) {
+			return ec.unmarshalOGeoBoundingBox2ᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐGeoBoundingBox(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["location"] = arg3
+	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "onlyFavorites",
+		func(ctx context.Context, v any) (*bool, error) {
+			return ec.unmarshalOBoolean2ᚖbool(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["onlyFavorites"] = arg4
+	arg5, err := graphql.ProcessArgField(ctx, rawArgs, "order",
+		func(ctx context.Context, v any) (*models.Ordering, error) {
+			return ec.unmarshalOOrdering2ᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐOrdering(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["order"] = arg5
+	arg6, err := graphql.ProcessArgField(ctx, rawArgs, "paginate",
+		func(ctx context.Context, v any) (*models.Pagination, error) {
+			return ec.unmarshalOPagination2ᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐPagination(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["paginate"] = arg6
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_mediaList_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -2896,6 +3036,14 @@ func (ec *executionContext) field_Query_myTimeline_args(ctx context.Context, raw
 		return nil, err
 	}
 	args["fromDate"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "toDate",
+		func(ctx context.Context, v any) (*time.Time, error) {
+			return ec.unmarshalOTime2ᚖtimeᚐTime(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["toDate"] = arg3
 	return args, nil
 }
 
@@ -3896,6 +4044,70 @@ func (ec *executionContext) fieldContext_Media_thumbnail(_ context.Context, fiel
 	return fc, nil
 }
 
+func (ec *executionContext) _Media_thumbnailSmall(ctx context.Context, field graphql.CollectedField, obj *models.Media) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Media_thumbnailSmall(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Media().ThumbnailSmall(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *models.MediaURL) graphql.Marshaler {
+			return ec.marshalOMediaURL2ᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐMediaURL(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Media_thumbnailSmall(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Media",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MediaURL(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Media_thumbnailTiny(ctx context.Context, field graphql.CollectedField, obj *models.Media) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Media_thumbnailTiny(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Media().ThumbnailTiny(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *models.MediaURL) graphql.Marshaler {
+			return ec.marshalOMediaURL2ᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐMediaURL(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Media_thumbnailTiny(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Media",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MediaURL(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Media_highRes(ctx context.Context, field graphql.CollectedField, obj *models.Media) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -4839,6 +5051,63 @@ func (ec *executionContext) fieldContext_Mutation_setAlbumCover(ctx context.Cont
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_setAlbumCover_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_setAlbumTitle(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_setAlbumTitle(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().SetAlbumTitle(ctx, fc.Args["albumID"].(int), fc.Args["title"].(string))
+		},
+		func(ctx context.Context, next graphql.Resolver) graphql.Resolver {
+			directive0 := next
+
+			directive1 := func(ctx context.Context) (any, error) {
+				if ec.Directives.IsAdmin == nil {
+					var zeroVal *models.Album
+					return zeroVal, errors.New("directive isAdmin is not implemented")
+				}
+				return ec.Directives.IsAdmin(ctx, nil, directive0)
+			}
+
+			next = directive1
+			return next
+		},
+		func(ctx context.Context, selections ast.SelectionSet, v *models.Album) graphql.Marshaler {
+			return ec.marshalNAlbum2ᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐAlbum(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_setAlbumTitle(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Album(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_setAlbumTitle_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -6810,6 +7079,63 @@ func (ec *executionContext) fieldContext_Query_search(ctx context.Context, field
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_filterMedia(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_filterMedia(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().FilterMedia(ctx, fc.Args["query"].(*string), fc.Args["dateFrom"].(*time.Time), fc.Args["dateTo"].(*time.Time), fc.Args["location"].(*models.GeoBoundingBox), fc.Args["onlyFavorites"].(*bool), fc.Args["order"].(*models.Ordering), fc.Args["paginate"].(*models.Pagination))
+		},
+		func(ctx context.Context, next graphql.Resolver) graphql.Resolver {
+			directive0 := next
+
+			directive1 := func(ctx context.Context) (any, error) {
+				if ec.Directives.IsAuthorized == nil {
+					var zeroVal []*models.Media
+					return zeroVal, errors.New("directive isAuthorized is not implemented")
+				}
+				return ec.Directives.IsAuthorized(ctx, nil, directive0)
+			}
+
+			next = directive1
+			return next
+		},
+		func(ctx context.Context, selections ast.SelectionSet, v []*models.Media) graphql.Marshaler {
+			return ec.marshalNMedia2ᚕᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐMediaᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_filterMedia(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Media(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_filterMedia_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_shareToken(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -6940,7 +7266,7 @@ func (ec *executionContext) _Query_myTimeline(ctx context.Context, field graphql
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().MyTimeline(ctx, fc.Args["paginate"].(*models.Pagination), fc.Args["onlyFavorites"].(*bool), fc.Args["fromDate"].(*time.Time))
+			return ec.Resolvers.Query().MyTimeline(ctx, fc.Args["paginate"].(*models.Pagination), fc.Args["onlyFavorites"].(*bool), fc.Args["fromDate"].(*time.Time), fc.Args["toDate"].(*time.Time))
 		},
 		func(ctx context.Context, next graphql.Resolver) graphql.Resolver {
 			directive0 := next
@@ -7384,6 +7710,38 @@ func (ec *executionContext) fieldContext_SearchResult_media(_ context.Context, f
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_Media(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SearchResult_faceGroups(ctx context.Context, field graphql.CollectedField, obj *models.SearchResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SearchResult_faceGroups(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.FaceGroups, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*models.FaceGroup) graphql.Marshaler {
+			return ec.marshalNFaceGroup2ᚕᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐFaceGroupᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SearchResult_faceGroups(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SearchResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_FaceGroup(ctx, field)
 		},
 	}
 	return fc, nil
@@ -9363,6 +9721,57 @@ func (ec *executionContext) fieldContext___Type_isOneOf(_ context.Context, field
 
 // region    **************************** input.gotpl *****************************
 
+func (ec *executionContext) unmarshalInputGeoBoundingBox(ctx context.Context, obj any) (models.GeoBoundingBox, error) {
+	var it models.GeoBoundingBox
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"minLatitude", "maxLatitude", "minLongitude", "maxLongitude"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "minLatitude":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("minLatitude"))
+			data, err := ec.unmarshalNFloat2float64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinLatitude = data
+		case "maxLatitude":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("maxLatitude"))
+			data, err := ec.unmarshalNFloat2float64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxLatitude = data
+		case "minLongitude":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("minLongitude"))
+			data, err := ec.unmarshalNFloat2float64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinLongitude = data
+		case "maxLongitude":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("maxLongitude"))
+			data, err := ec.unmarshalNFloat2float64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxLongitude = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputOrdering(ctx context.Context, obj any) (models.Ordering, error) {
 	var it models.Ordering
 	if obj == nil {
@@ -10210,6 +10619,82 @@ func (ec *executionContext) _Media(ctx context.Context, sel ast.SelectionSet, ob
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "thumbnailSmall":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Media_thumbnailSmall(ctx, field, obj)
+				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "thumbnailTiny":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Media_thumbnailTiny(ctx, field, obj)
+				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "highRes":
 			field := field
 
@@ -10821,6 +11306,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "setAlbumTitle":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_setAlbumTitle(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "setFaceGroupLabel":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_setFaceGroupLabel(ctx, field)
@@ -11323,6 +11815,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "filterMedia":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_filterMedia(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "shareToken":
 			field := field
 
@@ -11589,6 +12103,11 @@ func (ec *executionContext) _SearchResult(ctx context.Context, sel ast.Selection
 			}
 		case "media":
 			out.Values[i] = ec._SearchResult_media(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "faceGroups":
+			out.Values[i] = ec._SearchResult_faceGroups(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -13214,6 +13733,14 @@ func (ec *executionContext) marshalOFloat2ᚖfloat64(ctx context.Context, sel as
 	_ = sel
 	res := graphql.MarshalFloatContext(*v)
 	return graphql.WrapContextMarshaler(ctx, res)
+}
+
+func (ec *executionContext) unmarshalOGeoBoundingBox2ᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐGeoBoundingBox(ctx context.Context, v any) (*models.GeoBoundingBox, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputGeoBoundingBox(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) unmarshalOInt2ᚖint(ctx context.Context, v any) (*int, error) {

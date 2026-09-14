@@ -57,4 +57,10 @@ extend type Mutation {
 
   "Assign a cover photo to an album"
   setAlbumCover(coverID: ID!): Album! @isAuthorized
+
+  """
+  Rename an album. Only changes the title stored in the database,
+  the directory on the filesystem is left untouched.
+  """
+  setAlbumTitle(albumID: ID!, title: String!): Album! @isAdmin
 }

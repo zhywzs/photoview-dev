@@ -9,11 +9,14 @@ test('render present image', () => {
   const media: MediaGalleryFields = {
     __typename: 'Media',
     id: '123',
+    title: 'test media',
     type: MediaType.Photo,
     highRes: null,
     blurhash: null,
     videoWeb: null,
     favorite: false,
+      thumbnailSmall: null,
+      thumbnailTiny: null,
     thumbnail: {
       __typename: 'MediaURL',
       url: '/sample_image.jpg',
@@ -37,10 +40,13 @@ test('render present video', () => {
   const media: MediaGalleryFields = {
     __typename: 'Media',
     id: '123',
+    title: 'test media',
     type: MediaType.Video,
     highRes: null,
     blurhash: null,
     favorite: false,
+      thumbnailSmall: null,
+      thumbnailTiny: null,
     videoWeb: {
       __typename: 'MediaURL',
       url: '/sample_video.mp4',

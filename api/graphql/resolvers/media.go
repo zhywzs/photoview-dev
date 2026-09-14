@@ -24,6 +24,24 @@ func (r *mediaResolver) Thumbnail(ctx context.Context, obj *models.Media) (*mode
 	return dataloader.For(ctx).MediaThumbnail.Load(obj.ID)
 }
 
+// ThumbnailSmall is the resolver for the thumbnailSmall field.
+func (r *mediaResolver) ThumbnailSmall(ctx context.Context, obj *models.Media) (*models.MediaURL, error) {
+	if obj.Type != models.MediaTypePhoto {
+		return nil, nil
+	}
+
+	return dataloader.For(ctx).MediaThumbnailSmall.Load(obj.ID)
+}
+
+// ThumbnailTiny is the resolver for the thumbnailTiny field.
+func (r *mediaResolver) ThumbnailTiny(ctx context.Context, obj *models.Media) (*models.MediaURL, error) {
+	if obj.Type != models.MediaTypePhoto {
+		return nil, nil
+	}
+
+	return dataloader.For(ctx).MediaThumbnailTiny.Load(obj.ID)
+}
+
 // HighRes is the resolver for the highRes field.
 func (r *mediaResolver) HighRes(ctx context.Context, obj *models.Media) (*models.MediaURL, error) {
 	if obj.Type != models.MediaTypePhoto {

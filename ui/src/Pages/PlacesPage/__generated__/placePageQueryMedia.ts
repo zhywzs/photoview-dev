@@ -25,6 +25,38 @@ export interface placePageQueryMedia_mediaList_thumbnail {
   height: number;
 }
 
+export interface placePageQueryMedia_mediaList_thumbnailSmall {
+  __typename: "MediaURL";
+  /**
+   * URL for previewing the image
+   */
+  url: string;
+  /**
+   * Width of the image in pixels
+   */
+  width: number;
+  /**
+   * Height of the image in pixels
+   */
+  height: number;
+}
+
+export interface placePageQueryMedia_mediaList_thumbnailTiny {
+  __typename: "MediaURL";
+  /**
+   * URL for previewing the image
+   */
+  url: string;
+  /**
+   * Width of the image in pixels
+   */
+  width: number;
+  /**
+   * Height of the image in pixels
+   */
+  height: number;
+}
+
 export interface placePageQueryMedia_mediaList_highRes {
   __typename: "MediaURL";
   /**
@@ -70,6 +102,14 @@ export interface placePageQueryMedia_mediaList {
    */
   thumbnail: placePageQueryMedia_mediaList_thumbnail | null;
   /**
+   * URL to display the media in a small resolution (max 256px), used for zoomed out gallery views
+   */
+  thumbnailSmall: placePageQueryMedia_mediaList_thumbnailSmall | null;
+  /**
+   * URL to display the media in a tiny resolution (max 128px), used for ultra dense gallery views
+   */
+  thumbnailTiny: placePageQueryMedia_mediaList_thumbnailTiny | null;
+  /**
    * URL to display the photo in full resolution, will be null for videos
    */
   highRes: placePageQueryMedia_mediaList_highRes | null;
@@ -77,6 +117,7 @@ export interface placePageQueryMedia_mediaList {
    * URL to get the video in a web format that can be played in the browser, will be null for photos
    */
   videoWeb: placePageQueryMedia_mediaList_videoWeb | null;
+  favorite: boolean;
   type: MediaType;
 }
 

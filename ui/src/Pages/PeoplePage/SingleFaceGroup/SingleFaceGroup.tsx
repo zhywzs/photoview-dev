@@ -34,7 +34,20 @@ export const SINGLE_FACE_GROUP = gql`
             width
             height
           }
+          thumbnailSmall {
+            url
+            width
+            height
+          }
+          thumbnailTiny {
+            url
+            width
+            height
+          }
           highRes {
+            url
+          }
+          videoWeb {
             url
           }
           favorite

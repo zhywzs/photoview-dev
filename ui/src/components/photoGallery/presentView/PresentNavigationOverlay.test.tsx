@@ -33,7 +33,8 @@ describe('PresentNavigationOverlay component', () => {
       <PresentNavigationOverlay dispatchMedia={dispatchMedia} />
     )
 
-    expect(screen.getByLabelText('Next image')).toHaveClass('hide')
+    // controls are visible by default (touch friendly)
+    expect(screen.getByLabelText('Next image')).not.toHaveClass('hide')
 
     fireEvent.mouseMove(container.firstChild!)
     expect(screen.getByLabelText('Next image')).not.toHaveClass('hide')

@@ -79,6 +79,10 @@ type Media {
   path: String!
   "URL to display the media in a smaller resolution"
   thumbnail: MediaURL
+  "URL to display the media in a small resolution (max 256px), used for zoomed out gallery views"
+  thumbnailSmall: MediaURL
+  "URL to display the media in a tiny resolution (max 128px), used for ultra dense gallery views"
+  thumbnailTiny: MediaURL
   "URL to display the photo in full resolution, will be null for videos"
   highRes: MediaURL
   "URL to get the video in a web format that can be played in the browser, will be null for photos"

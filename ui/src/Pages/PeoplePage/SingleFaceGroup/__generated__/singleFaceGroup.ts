@@ -33,7 +33,47 @@ export interface singleFaceGroup_faceGroup_imageFaces_media_thumbnail {
   height: number;
 }
 
+export interface singleFaceGroup_faceGroup_imageFaces_media_thumbnailSmall {
+  __typename: "MediaURL";
+  /**
+   * URL for previewing the image
+   */
+  url: string;
+  /**
+   * Width of the image in pixels
+   */
+  width: number;
+  /**
+   * Height of the image in pixels
+   */
+  height: number;
+}
+
+export interface singleFaceGroup_faceGroup_imageFaces_media_thumbnailTiny {
+  __typename: "MediaURL";
+  /**
+   * URL for previewing the image
+   */
+  url: string;
+  /**
+   * Width of the image in pixels
+   */
+  width: number;
+  /**
+   * Height of the image in pixels
+   */
+  height: number;
+}
+
 export interface singleFaceGroup_faceGroup_imageFaces_media_highRes {
+  __typename: "MediaURL";
+  /**
+   * URL for previewing the image
+   */
+  url: string;
+}
+
+export interface singleFaceGroup_faceGroup_imageFaces_media_videoWeb {
   __typename: "MediaURL";
   /**
    * URL for previewing the image
@@ -55,9 +95,21 @@ export interface singleFaceGroup_faceGroup_imageFaces_media {
    */
   thumbnail: singleFaceGroup_faceGroup_imageFaces_media_thumbnail | null;
   /**
+   * URL to display the media in a small resolution (max 256px), used for zoomed out gallery views
+   */
+  thumbnailSmall: singleFaceGroup_faceGroup_imageFaces_media_thumbnailSmall | null;
+  /**
+   * URL to display the media in a tiny resolution (max 128px), used for ultra dense gallery views
+   */
+  thumbnailTiny: singleFaceGroup_faceGroup_imageFaces_media_thumbnailTiny | null;
+  /**
    * URL to display the photo in full resolution, will be null for videos
    */
   highRes: singleFaceGroup_faceGroup_imageFaces_media_highRes | null;
+  /**
+   * URL to get the video in a web format that can be played in the browser, will be null for photos
+   */
+  videoWeb: singleFaceGroup_faceGroup_imageFaces_media_videoWeb | null;
   favorite: boolean;
 }
 

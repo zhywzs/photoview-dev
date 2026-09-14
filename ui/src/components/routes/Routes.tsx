@@ -21,6 +21,10 @@ const TimelinePage = React.lazy(
   () => import('../../Pages/TimelinePage/TimelinePage')
 )
 const PlacesPage = React.lazy(() => import('../../Pages/PlacesPage/PlacesPage'))
+const SearchPage = React.lazy(() => import('../../Pages/SearchPage/SearchPage'))
+const FavoritesPage = React.lazy(
+  () => import('../../Pages/FavoritesPage/FavoritesPage')
+)
 
 const LoginPage = React.lazy(() => import('../../Pages/LoginPage/LoginPage'))
 const InitialSetupPage = React.lazy(
@@ -89,6 +93,14 @@ const Routes = () => {
     {
       path: '/timeline',
       element: authorized(<TimelinePage />),
+    },
+    {
+      path: '/search',
+      element: authorized(<SearchPage />),
+    },
+    {
+      path: '/favorites',
+      element: authorized(<FavoritesPage />),
     },
     {
       path: '/places',

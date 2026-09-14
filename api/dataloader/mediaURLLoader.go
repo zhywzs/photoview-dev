@@ -51,6 +51,26 @@ func NewThumbnailMediaURLLoader(db *gorm.DB) *MediaURLLoader {
 	}
 }
 
+func NewThumbnailSmallMediaURLLoader(db *gorm.DB) *MediaURLLoader {
+	return &MediaURLLoader{
+		maxBatch: 100,
+		wait:     5 * time.Millisecond,
+		fetch: makeMediaURLLoader(db, func(query *gorm.DB) *gorm.DB {
+			return query.Where("purpose = ?", string(models.PhotoThumbnailSmall))
+		}),
+	}
+}
+
+func NewThumbnailTinyMediaURLLoader(db *gorm.DB) *MediaURLLoader {
+	return &MediaURLLoader{
+		maxBatch: 100,
+		wait:     5 * time.Millisecond,
+		fetch: makeMediaURLLoader(db, func(query *gorm.DB) *gorm.DB {
+			return query.Where("purpose = ?", string(models.PhotoThumbnailTiny))
+		}),
+	}
+}
+
 func NewHighresMediaURLLoader(db *gorm.DB) *MediaURLLoader {
 	return &MediaURLLoader{
 		maxBatch: 100,

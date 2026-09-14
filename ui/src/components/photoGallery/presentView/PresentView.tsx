@@ -29,6 +29,9 @@ type PresentViewProps = {
   activeMedia: MediaGalleryFields
   dispatchMedia: React.Dispatch<GalleryAction>
   disableSaveCloseInHistory?: boolean
+  favorite?: boolean
+  onToggleFavorite?(): void
+  onToggleInfo?(): void
 }
 
 const PresentView = ({
@@ -37,6 +40,9 @@ const PresentView = ({
   activeMedia,
   dispatchMedia,
   disableSaveCloseInHistory,
+  favorite,
+  onToggleFavorite,
+  onToggleInfo,
 }: PresentViewProps) => {
   useEffect(() => {
     const keyDownEvent = (e: KeyboardEvent) => {
@@ -74,6 +80,9 @@ const PresentView = ({
       <PresentNavigationOverlay
         dispatchMedia={dispatchMedia}
         disableSaveCloseInHistory
+        favorite={favorite}
+        onToggleFavorite={onToggleFavorite}
+        onToggleInfo={onToggleInfo}
       >
         <PresentMedia media={activeMedia} imageLoaded={imageLoaded} />
       </PresentNavigationOverlay>

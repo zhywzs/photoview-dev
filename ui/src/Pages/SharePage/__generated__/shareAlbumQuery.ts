@@ -52,6 +52,38 @@ export interface shareAlbumQuery_album_media_thumbnail {
   height: number;
 }
 
+export interface shareAlbumQuery_album_media_thumbnailSmall {
+  __typename: "MediaURL";
+  /**
+   * URL for previewing the image
+   */
+  url: string;
+  /**
+   * Width of the image in pixels
+   */
+  width: number;
+  /**
+   * Height of the image in pixels
+   */
+  height: number;
+}
+
+export interface shareAlbumQuery_album_media_thumbnailTiny {
+  __typename: "MediaURL";
+  /**
+   * URL for previewing the image
+   */
+  url: string;
+  /**
+   * Width of the image in pixels
+   */
+  width: number;
+  /**
+   * Height of the image in pixels
+   */
+  height: number;
+}
+
 export interface shareAlbumQuery_album_media_downloads_mediaUrl {
   __typename: "MediaURL";
   /**
@@ -184,6 +216,14 @@ export interface shareAlbumQuery_album_media {
    */
   thumbnail: shareAlbumQuery_album_media_thumbnail | null;
   /**
+   * URL to display the media in a small resolution (max 256px), used for zoomed out gallery views
+   */
+  thumbnailSmall: shareAlbumQuery_album_media_thumbnailSmall | null;
+  /**
+   * URL to display the media in a tiny resolution (max 128px), used for ultra dense gallery views
+   */
+  thumbnailTiny: shareAlbumQuery_album_media_thumbnailTiny | null;
+  /**
    * A list of different versions of files for this media that can be downloaded by the user
    */
   downloads: shareAlbumQuery_album_media_downloads[];
@@ -195,6 +235,7 @@ export interface shareAlbumQuery_album_media {
    * URL to get the video in a web format that can be played in the browser, will be null for photos
    */
   videoWeb: shareAlbumQuery_album_media_videoWeb | null;
+  favorite: boolean;
   exif: shareAlbumQuery_album_media_exif | null;
 }
 
