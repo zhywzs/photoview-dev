@@ -232,6 +232,44 @@ cd ~/photoview-dev/photoview/ui && npx vitest run        # 前端测试
 
 **Windows ↔ WSL 路径映射**:WSL 文件系统在 Windows 侧为 `\\wsl.localhost\Ubuntu-24.04\home\<user>\...`(资源管理器地址栏可直接访问)。本开发流程以 Windows 侧副本为编辑源、rsync 单向同步到 WSL,直接修改 WSL 侧文件会被下次同步覆盖。
 
+### 将 Windows 图片目录接入 Photoview
+
+Windows 驱动器在 WSL 中已自动挂载(`/mnt/c`、`/mnt/d`…),无需额外操作:
+
+```bash
+# 1. 确认路径可见
+ls /mnt/d/Pictures            # 对应 D:\Pictures
+
+# 2. (推荐)做个软链接,路径更干净
+ln -s /mnt/d/Pictures ~/photos
+ls ~/photos                   # 验证
+```
+
+**3. 添加为相册根路径**(两种方式任选):
+
+- 网页:设置 → Users → 编辑用户 → Root paths 添加 `/home/<user>/photos`(或直接 `/mnt/d/Pictures`)→ 保存
+- GraphQL:
+
+```bash
+curl -X POST http://localhost:4001/api/graphql \
+  -H 'Content-Type: application/json' \
+  -H 'Cookie: auth-token=<24位token>' \
+  -d '{"query":"mutation { userAddRootPath(id: 1, rootPath: \"/mnt/d/Pictures\") { id username } }"}'
+```
+
+**4. 触发扫描**:设置页点 Scan All。Windows 侧照片按目录结构生成相册。
+
+注意事项:
+
+| 事项 | 说明 |
+|---|---|
+| 性能 | `/mnt/*` 走 9P 协议,**首次扫描慢**(每张照片跨文件系统读 EXIF + 生成缩略图,万张级可能需几十分钟);之后浏览走 WSL 内缩略图缓存,不受影响 |
+| 缓存位置 | 缩略图缓存在 WSL ext4 内(`~/photoview-dev/photoview/api/media_cache`),**不要**挪到 /mnt |
+| 改动同步 | Windows 侧增删照片后需再 Scan All(或设置周期扫描)才会反映 |
+| 大小写 | Windows 文件系统不区分大小写,同一目录用不同大小写路径添加两次会生成重复相册,路径必须完全一致 |
+| 外接硬盘 | 移动硬盘须在 WSL 启动前已连接,否则 `/mnt` 下不可见 |
+| 大库优化 | 数万张以上且频繁全量重扫可迁入 WSL 原生文件系统(ext4,IO 快一个数量级),Windows 侧改用 `\\wsl.localhost\...` 访问 |
+
 ## 技术细节
 
 - 网格布局/缩放锚点/日期分组均为纯函数(`ui/src/components/photoGrid/gridLayout.ts`、`timelineGrouping.ts`),配单元测试
