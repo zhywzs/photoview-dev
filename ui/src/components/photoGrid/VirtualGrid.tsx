@@ -26,6 +26,8 @@ type VirtualGridProps<T> = {
    * expected to be shown by a floating overlay (15/30 column levels).
    */
   renderHeaders?: boolean
+  /** extra rows rendered above/below the viewport */
+  overscanRows?: number
   renderItem: (
     item: T,
     absoluteIndex: number,
@@ -54,6 +56,7 @@ const VirtualGrid = <T,>({
   columns,
   gap = GRID_GAP,
   renderHeaders = true,
+  overscanRows = 3,
   renderItem,
   renderSectionTitle,
   onLayoutChange,
@@ -134,7 +137,8 @@ const VirtualGrid = <T,>({
           section,
           layout,
           viewport.top,
-          viewport.bottom
+          viewport.bottom,
+          overscanRows
         )
         if (rowRange == null) return null
 
