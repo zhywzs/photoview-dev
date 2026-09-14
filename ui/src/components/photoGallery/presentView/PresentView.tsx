@@ -1,8 +1,12 @@
-import React, { useEffect } from 'react'
-import styled, { createGlobalStyle } from 'styled-components'
-import PresentNavigationOverlay from './PresentNavigationOverlay'
+import React, { useEffect, useRef, useState } from 'react'
+import styled from 'styled-components'
 import PresentMedia from './PresentMedia'
-import { closePresentModeAction, GalleryAction } from '../mediaGalleryReducer'
+import PresentControls from './PresentControls'
+import MediaInfoPanel from './MediaInfoPanel'
+import {
+  closePresentModeAction,
+  GalleryAction,
+} from '../mediaGalleryReducer'
 import { MediaGalleryFields } from '../__generated__/MediaGalleryFields'
 
 const StyledContainer = styled.div`
@@ -17,11 +21,14 @@ const StyledContainer = styled.div`
   overscroll-behavior: none;
 `
 
-const PreventScroll = createGlobalStyle`
-  * {
-    overflow: hidden !important;
-  }
-`
+/** vertical drag distance that closes the viewer */
+const CLOSE_DRAG_THRESHOLD = 100
+/** horizontal drag distance (or fling) that turns the page */
+const PAGE_DRAG_RATIO = 0.3
+const PAGE_FLING_VELOCITY = 0.5 // px per ms
+const PAGE_ANIMATION_MS = 240
+const CLOSE_ANIMATION_MS = 260
+const CONTROLS_AUTOHIDE_MS = 2500
 
 type PresentViewProps = {
   className?: string
@@ -31,9 +38,32 @@ type PresentViewProps = {
   disableSaveCloseInHistory?: boolean
   favorite?: boolean
   onToggleFavorite?(): void
-  onToggleInfo?(): void
+  /** full media list; enables neighbor previews while paging */
+  mediaList?: MediaGalleryFields[]
+  /** index of activeMedia inside mediaList */
+  activeIndex?: number
+  /** page to an absolute index (used when mediaList is provided) */
+  onSelectIndex?(index: number): void
 }
 
+/**
+ * Full screen presentation mode.
+ *
+ * Gestures
+ * --------
+ *  - swipe left / right: the media track follows the finger; releasing
+ *    past a third of the screen (or with a fling) completes the page turn
+ *    with the neighbor already visible under the finger, otherwise it
+ *    springs back. At the ends of the list the drag rubber-bands.
+ *  - drag down: the media follows the finger downward, shrinking and
+ *    dimming; releasing past the threshold closes the viewer with a fall
+ *    animation, otherwise it springs back.
+ *  - tap: toggles the controls; Escape closes the info panel first, then
+ *    the viewer.
+ *
+ * The media info is shown in a panel of its own (bottom sheet on mobile,
+ * side drawer on desktop) instead of the page-level sidebar.
+ */
 const PresentView = ({
   className,
   imageLoaded,
@@ -42,52 +72,340 @@ const PresentView = ({
   disableSaveCloseInHistory,
   favorite,
   onToggleFavorite,
-  onToggleInfo,
+  mediaList,
+  activeIndex,
+  onSelectIndex,
 }: PresentViewProps) => {
+  // ---- paging / closing state ----
+  const [pageOffset, setPageOffset] = useState(0)
+  const [pageAnimating, setPageAnimating] = useState(false)
+  const [closeDrag, setCloseDrag] = useState(0)
+  const [closing, setClosing] = useState(false)
+  const busyRef = useRef(false)
+
+  // ---- info panel ----
+  const [infoOpen, setInfoOpen] = useState(false)
+
+  // ---- controls visibility ----
+  const [controlsVisible, setControlsVisible] = useState(true)
+  const hideTimerRef = useRef<number | undefined>(undefined)
+
+  const showControls = () => {
+    setControlsVisible(true)
+    if (hideTimerRef.current != null) window.clearTimeout(hideTimerRef.current)
+    hideTimerRef.current = window.setTimeout(
+      () => setControlsVisible(false),
+      CONTROLS_AUTOHIDE_MS
+    )
+  }
+
+  useEffect(() => {
+    showControls()
+    return () => {
+      if (hideTimerRef.current != null) window.clearTimeout(hideTimerRef.current)
+    }
+  }, [activeMedia.id])
+
+  const closeViewer = () => {
+    if (closing) return
+    setClosing(true)
+    window.setTimeout(() => {
+      if (disableSaveCloseInHistory === true) {
+        dispatchMedia({ type: 'closePresentMode' })
+      } else {
+        closePresentModeAction({ dispatchMedia })
+      }
+    }, CLOSE_ANIMATION_MS)
+  }
+
+  // ---- keyboard ----
   useEffect(() => {
     const keyDownEvent = (e: KeyboardEvent) => {
       if (e.key == 'ArrowRight') {
         e.stopPropagation()
-        dispatchMedia({ type: 'nextImage' })
-      }
-
-      if (e.key == 'ArrowLeft') {
+        page(1)
+      } else if (e.key == 'ArrowLeft') {
         e.stopPropagation()
-        dispatchMedia({ type: 'previousImage' })
-      }
-
-      if (e.key == 'Escape') {
+        page(-1)
+      } else if (e.key == 'Escape') {
         e.stopPropagation()
-
-        if (disableSaveCloseInHistory === true) {
-          dispatchMedia({ type: 'closePresentMode' })
+        if (infoOpen) {
+          setInfoOpen(false)
         } else {
-          closePresentModeAction({ dispatchMedia })
+          closeViewer()
         }
       }
     }
 
     document.addEventListener('keydown', keyDownEvent)
-
-    return function cleanup() {
-      document.removeEventListener('keydown', keyDownEvent)
-    }
+    return () => document.removeEventListener('keydown', keyDownEvent)
   })
 
+  // ---- neighbors ----
+  const hasList = mediaList != null && activeIndex != null && activeIndex >= 0
+  const prevMedia =
+    hasList && mediaList != null && activeIndex != null && activeIndex > 0
+      ? mediaList[activeIndex - 1]
+      : null
+  const nextMedia =
+    hasList && mediaList != null && activeIndex != null
+      ? activeIndex < mediaList.length - 1
+        ? mediaList[activeIndex + 1]
+        : null
+      : null
+
+  const page = (direction: 1 | -1) => {
+    if (busyRef.current || closing) return
+
+    const neighbor = direction > 0 ? nextMedia : prevMedia
+    if (hasList && neighbor == null) return // at the end of the list
+
+    busyRef.current = true
+    setPageAnimating(true)
+    setPageOffset(-direction * window.innerWidth)
+
+    window.setTimeout(() => {
+      if (mediaList != null && activeIndex != null && onSelectIndex != null) {
+        onSelectIndex(activeIndex + direction)
+      } else {
+        dispatchMedia({ type: direction > 0 ? 'nextImage' : 'previousImage' })
+      }
+      // reset instantly (no transition) - the former neighbor now renders
+      // at the center, which is exactly where the animation ended
+      setPageAnimating(false)
+      setPageOffset(0)
+      busyRef.current = false
+    }, PAGE_ANIMATION_MS)
+  }
+
+  // ---- touch gestures: axis-locked paging + drag down to close ----
+  const stageRef = useRef<HTMLDivElement | null>(null)
+
+  // the gesture listeners register once; everything they need from the
+  // render scope flows through these refs so they never go stale
+  const pageRef = useRef(page)
+  pageRef.current = page
+  const closeViewerRef = useRef(closeViewer)
+  closeViewerRef.current = closeViewer
+  const edgesRef = useRef({ hasList, hasPrev: prevMedia != null, hasNext: nextMedia != null })
+  edgesRef.current = { hasList, hasPrev: prevMedia != null, hasNext: nextMedia != null }
+  const closingRef = useRef(closing)
+  closingRef.current = closing
+
+  useEffect(() => {
+    const elem = stageRef.current
+    if (elem == null) return
+
+    let start: { x: number; y: number; time: number } | null = null
+    let axis: 'none' | 'horizontal' | 'vertical' = 'none'
+
+    const onTouchStart = (event: TouchEvent) => {
+      if (event.touches.length != 1 || busyRef.current || closingRef.current)
+        return
+      const touch = event.touches[0]
+      start = { x: touch.clientX, y: touch.clientY, time: Date.now() }
+      axis = 'none'
+    }
+
+    const onTouchMove = (event: TouchEvent) => {
+      if (start == null || event.touches.length != 1) return
+      const touch = event.touches[0]
+      const dx = touch.clientX - start.x
+      const dy = touch.clientY - start.y
+
+      if (axis == 'none' && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+        axis = Math.abs(dx) > Math.abs(dy) ? 'horizontal' : 'vertical'
+      }
+
+      if (axis == 'horizontal') {
+        event.preventDefault()
+        // rubber-band at the ends of the list
+        const edges = edgesRef.current
+        const beyondStart = dx > 0 && !edges.hasPrev && edges.hasList
+        const beyondEnd = dx < 0 && !edges.hasNext && edges.hasList
+        setPageOffset(
+          beyondStart || beyondEnd ? dx * 0.25 : dx
+        )
+      } else if (axis == 'vertical') {
+        event.preventDefault()
+        setCloseDrag(Math.max(0, dy))
+      }
+    }
+
+    const onTouchEnd = (event: TouchEvent) => {
+      if (start == null) return
+      const touch = event.changedTouches[0]
+      const dx = touch.clientX - start.x
+      const dy = touch.clientY - start.y
+      const dt = Math.max(1, Date.now() - start.time)
+      start = null
+
+      if (axis == 'horizontal') {
+        axis = 'none'
+        const velocity = dx / dt
+        const distance = Math.abs(dx)
+        if (
+          distance > window.innerWidth * PAGE_DRAG_RATIO ||
+          Math.abs(velocity) > PAGE_FLING_VELOCITY
+        ) {
+          pageRef.current(dx < 0 ? 1 : -1)
+        } else if (dx != 0) {
+          // spring back
+          setPageAnimating(true)
+          setPageOffset(0)
+          window.setTimeout(() => setPageAnimating(false), PAGE_ANIMATION_MS)
+        }
+        return
+      }
+
+      if (axis == 'vertical') {
+        axis = 'none'
+        const velocity = dy / dt
+        if (dy > CLOSE_DRAG_THRESHOLD || velocity > 1) {
+          closeViewerRef.current()
+        } else {
+          setCloseDrag(0)
+        }
+        return
+      }
+
+      // no gesture: tap toggles the controls
+      if (Math.hypot(dx, dy) < 8) {
+        setControlsVisible(visible => {
+          const next = !visible
+          if (hideTimerRef.current != null)
+            window.clearTimeout(hideTimerRef.current)
+          if (next) {
+            hideTimerRef.current = window.setTimeout(
+              () => setControlsVisible(false),
+              CONTROLS_AUTOHIDE_MS
+            )
+          }
+          return next
+        })
+      }
+    }
+
+    elem.addEventListener('touchstart', onTouchStart, { passive: true })
+    elem.addEventListener('touchmove', onTouchMove, { passive: false })
+    elem.addEventListener('touchend', onTouchEnd, { passive: false })
+    return () => {
+      elem.removeEventListener('touchstart', onTouchStart)
+      elem.removeEventListener('touchmove', onTouchMove)
+      elem.removeEventListener('touchend', onTouchEnd)
+    }
+  }, [])
+
+  // ---- derived transform styles ----
+  const closeProgress = Math.min(
+    1,
+    Math.max(0, closeDrag) / (window.innerHeight * 0.5)
+  )
+
+  const stageStyle: React.CSSProperties = closing
+    ? {
+        transform: `translateY(${window.innerHeight * 0.6}px) scale(0.55)`,
+        opacity: 0,
+        transition: `transform ${CLOSE_ANIMATION_MS}ms ease-in, opacity ${CLOSE_ANIMATION_MS}ms ease-in`,
+      }
+    : closeDrag > 0
+    ? {
+        transform: `translateY(${closeDrag * 0.55}px) scale(${1 - closeProgress * 0.25})`,
+        borderRadius: `${closeProgress * 20}px`,
+        overflow: 'hidden',
+      }
+    : {}
+
+  const trackStyle: React.CSSProperties = {
+    transform: `translateX(${pageOffset}px)`,
+    transition: pageAnimating
+      ? `transform ${PAGE_ANIMATION_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`
+      : 'none',
+  }
+
   return (
-    <StyledContainer className={className}>
-      <PreventScroll />
-      <PresentNavigationOverlay
-        dispatchMedia={dispatchMedia}
-        disableSaveCloseInHistory
+    <StyledContainer
+      className={className}
+      data-testid="present-overlay"
+      style={
+        closing
+          ? { transition: 'opacity 220ms ease-out', opacity: 0 }
+          : undefined
+      }
+    >
+      {/* dimming while dragging down / closing */}
+      {(closeDrag > 0 || closing) && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'black',
+            opacity: closing ? 1 : closeProgress * 0.85,
+            transition: closing ? 'opacity 220ms ease-out' : 'none',
+            pointerEvents: 'none',
+            zIndex: 1,
+          }}
+        />
+      )}
+
+      {/* gesture stage */}
+      <div
+        ref={stageRef}
+        style={{ position: 'absolute', inset: 0, zIndex: 2, ...stageStyle }}
+      >
+        <div style={{ position: 'absolute', inset: 0, ...trackStyle }}>
+          <SlideView position="-100%" media={prevMedia} />
+          <SlideView position="0" media={activeMedia} imageLoaded={imageLoaded} />
+          <SlideView position="100%" media={nextMedia} />
+        </div>
+      </div>
+
+      {/* controls */}
+      <PresentControls
+        visible={controlsVisible && !closing && closeDrag == 0}
         favorite={favorite}
         onToggleFavorite={onToggleFavorite}
-        onToggleInfo={onToggleInfo}
-      >
-        <PresentMedia media={activeMedia} imageLoaded={imageLoaded} />
-      </PresentNavigationOverlay>
+        onToggleInfo={() => {
+          setInfoOpen(open => !open)
+          showControls()
+        }}
+        infoOpen={infoOpen}
+        onClose={closeViewer}
+        onPrev={() => page(-1)}
+        onNext={() => page(1)}
+      />
+
+      {/* media info panel (bottom sheet on mobile, drawer on desktop) */}
+      <MediaInfoPanel
+        open={infoOpen}
+        onClose={() => setInfoOpen(false)}
+        mediaId={activeMedia.id}
+      />
     </StyledContainer>
   )
 }
+
+type SlideViewProps = {
+  /** horizontal position of the slide inside the track, e.g. "-100%" */
+  position: string
+  media?: MediaGalleryFields | null
+  imageLoaded?(): void
+}
+
+/** One page of the media track. Empty slides stay mounted as spacers. */
+const SlideView = ({ position, media, imageLoaded }: SlideViewProps) => (
+  <div
+    style={{
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      width: '100%',
+      left: position,
+      visibility: media != null ? 'visible' : 'hidden',
+    }}
+  >
+    {media != null && <PresentMedia media={media} imageLoaded={imageLoaded} />}
+  </div>
+)
 
 export default PresentView

@@ -102,9 +102,9 @@ const MediaGallery = ({ mediaState, dispatchMedia }: MediaGalleryProps) => {
           onToggleFavorite={() => {
             toggleFavoriteAction({ media: activeMedia, markFavorite })
           }}
-          onToggleInfo={() => {
-            updateSidebar(<MediaSidebar media={activeMedia} />)
-          }}
+          mediaList={media}
+          activeIndex={activeIndex}
+          onSelectIndex={index => dispatchMedia({ type: 'selectImage', index })}
         />
       )}
     </>

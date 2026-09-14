@@ -376,9 +376,9 @@ const TimelineGallery = ({ forceFavorites = false }: TimelineGalleryProps) => {
           onToggleFavorite={() => {
             toggleFavoriteAction({ media: activeMedia, markFavorite })
           }}
-          onToggleInfo={() => {
-            updateSidebar(<MediaSidebar media={activeMedia} />)
-          }}
+          mediaList={mediaState.media}
+          activeIndex={mediaState.activeIndex}
+          onSelectIndex={index => dispatchMedia({ type: 'selectImage', index })}
         />
       )}
     </div>
