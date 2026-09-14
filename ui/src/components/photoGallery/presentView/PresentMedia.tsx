@@ -42,6 +42,13 @@ const StyledVideo = styled(ProtectedVideo)`
 type PresentMediaProps = {
   media: MediaGalleryFields
   imageLoaded?(): void
+  /**
+   * Render only the lightweight thumbnail (no high-res fetch, no video
+   * element). Used for neighbor slides in the paging track so swiping
+   * stays fluid on slow networks; the full media loads once the slide
+   * becomes the center.
+   */
+  previewOnly?: boolean
 }
 
 /**
@@ -52,7 +59,12 @@ type PresentMediaProps = {
  * While zoomed in, touch events no longer reach the swipe navigation
  * handler of the parent overlay.
  */
-const PresentMedia = ({ media, imageLoaded, ...otherProps }: PresentMediaProps) => {
+const PresentMedia = ({
+  media,
+  imageLoaded,
+  previewOnly,
+  ...otherProps
+}: PresentMediaProps) => {
   const [scale, setScale] = useState(1)
   const [translate, setTranslate] = useState({ x: 0, y: 0 })
   const [animating, setAnimating] = useState(false)
@@ -274,21 +286,38 @@ const PresentMedia = ({ media, imageLoaded, ...otherProps }: PresentMediaProps) 
               src={media.thumbnail?.url}
               data-testid="present-img-thumbnail"
             />
-            <StyledPhoto
-              key={`${media.id}-highres`}
-              style={{ display: 'none' }}
-              src={media.highRes?.url}
-              data-testid="present-img-highres"
-              onLoad={e => {
-                const elem = e.target as HTMLImageElement
-                elem.style.display = 'initial'
-                imageLoaded && imageLoaded()
-              }}
-            />
+            {!previewOnly && (
+              <StyledPhoto
+                key={`${media.id}-highres`}
+                style={{ display: 'none' }}
+                src={media.highRes?.url}
+                data-testid="present-img-highres"
+                onLoad={e => {
+                  const elem = e.target as HTMLImageElement
+                  elem.style.display = 'initial'
+                  imageLoaded && imageLoaded()
+                }}
+              />
+            )}
           </MediaLayer>
         </div>
       )
     case MediaType.Video:
+      if (previewOnly) {
+        // neighbor previews render the poster frame instead of mounting
+        // a second video element
+        return (
+          <div {...otherProps}>
+            <MediaLayer ref={layerRef} transform={transform} animating={animating}>
+              <StyledPhoto
+                key={`${media.id}-thumb`}
+                src={media.thumbnail?.url}
+                data-testid="present-img-thumbnail"
+              />
+            </MediaLayer>
+          </div>
+        )
+      }
       return <StyledVideo media={media} data-testid="present-video" />
   }
 

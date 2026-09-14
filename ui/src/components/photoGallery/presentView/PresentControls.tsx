@@ -19,7 +19,7 @@ type PresentControlsProps = {
 const buttonBase =
   'w-11 h-11 rounded-full bg-black/40 hover:bg-black/65 active:bg-black/70 border-none outline-none cursor-pointer flex items-center justify-center text-white/85 hover:text-white transition-colors'
 
-const PresentControls = ({
+const PresentControls = React.memo(({
   visible,
   favorite,
   onToggleFavorite,
@@ -108,6 +108,6 @@ const PresentControls = ({
       </button>
     </div>
   )
-}
+})
 
 export default PresentControls

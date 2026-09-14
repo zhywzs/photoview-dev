@@ -55,7 +55,13 @@ export const ProtectedImage = ({
 
   if (!lazyLoading) {
     return (
-      <img {...props} src={url} loading="eager" crossOrigin="use-credentials" />
+      <img
+        {...props}
+        src={url}
+        loading="eager"
+        decoding="async"
+        crossOrigin="use-credentials"
+      />
     )
   }
 
@@ -70,6 +76,7 @@ export const ProtectedImage = ({
         {...props}
         src={url}
         loading="lazy"
+        decoding="async"
         crossOrigin="use-credentials"
         onLoad={didLoad}
       />
