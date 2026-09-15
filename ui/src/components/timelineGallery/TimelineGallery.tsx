@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useReducer } from 'react'
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useState,
+} from 'react'
 import { useQuery, gql } from '@apollo/client'
 import PhotoGrid from '../photoGrid/PhotoGrid'
 import PresentView from '../photoGallery/presentView/PresentView'
@@ -30,7 +36,7 @@ import {
   groupTimeline,
   targetRowsForColumns,
 } from '../photoGrid/timelineGrouping'
-import { COLUMN_LEVELS, useZoomLevels } from '../photoGrid/useZoomLevels'
+import { readStoredColumns } from '../photoGrid/gridZoom'
 
 export const MY_TIMELINE_QUERY = gql`
   query myTimeline(
@@ -254,10 +260,10 @@ const TimelineGallery = ({ forceFavorites = false }: TimelineGalleryProps) => {
     [markFavorite]
   )
 
-  // the zoom state is shared with the grid so the date grouping
-  // granularity can follow the zoom level
-  const zoom = useZoomLevels()
-  const columns = COLUMN_LEVELS[zoom.level]
+  // The grid owns the continuous zoom; it reports the settled column count
+  // back so the date grouping granularity can follow it. While zooming the
+  // grouping is frozen (the grid keeps using the last settled value).
+  const [columns, setColumns] = useState(() => readStoredColumns())
 
   // group the timeline into adaptive date sections for the virtualized grid
   const { sections, sectionRanges } = useMemo(() => {
@@ -347,8 +353,8 @@ const TimelineGallery = ({ forceFavorites = false }: TimelineGalleryProps) => {
         onItemActivate={onItemActivate}
         onItemFavorite={onItemFavorite}
         activeId={activeMedia?.id}
-        zoomLevel={zoom.level}
-        onZoomLevelChange={level => zoom.setLevel(level)}
+        modeColumns={columns}
+        onColumnsChange={setColumns}
       />
       <div ref={containerElem}>
         <PaginateLoader

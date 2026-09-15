@@ -1,0 +1,74 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+
+/**
+ * Continuous grid zoom expressed as a column count.
+ *
+ * The grid used to zoom through four discrete levels (3 / 5 / 15 / 30). It
+ * now accepts any integer column count in [MIN_COLUMNS, MAX_COLUMNS], so a
+ * pinch reflows the layout one column at a time instead of scaling the whole
+ * grid and then snapping to a new level.
+ */
+export const MIN_COLUMNS = 3
+export const MAX_COLUMNS = 30
+
+/** Named stops, used by double tap and the discrete zoom buttons. */
+export const COLUMN_STOPS = [3, 5, 15, 30] as const
+
+const DEFAULT_COLUMNS = 5
+const STORAGE_KEY = 'photoview.zoomLevel'
+
+export function clampColumns(columns: number): number {
+  if (!Number.isFinite(columns)) return DEFAULT_COLUMNS
+  return Math.max(MIN_COLUMNS, Math.min(MAX_COLUMNS, Math.round(columns)))
+}
+
+export function readStoredColumns(): number {
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY)
+    if (stored == null) return DEFAULT_COLUMNS
+    const value = parseInt(stored)
+    if (isNaN(value)) return DEFAULT_COLUMNS
+    return clampColumns(value)
+  } catch {
+    return DEFAULT_COLUMNS
+  }
+}
+
+export function persistColumns(columns: number): void {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, `${clampColumns(columns)}`)
+  } catch {
+    // storage unavailable, keep in-memory value
+  }
+}
+
+export type GridZoom = {
+  columns: number
+  setColumns(columns: number): void
+}
+
+/**
+ * Persisted, continuous grid zoom. The column count is the single source of
+ * truth; everything else (tile size, grouping) derives from it.
+ */
+export const useGridZoom = (): GridZoom => {
+  const [columns, setColumnsState] = useState(() =>
+    typeof window === 'undefined' ? DEFAULT_COLUMNS : readStoredColumns()
+  )
+
+  const setColumns = useCallback((next: number) => {
+    setColumnsState(clampColumns(next))
+  }, [])
+
+  const persistTimer = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (persistTimer.current != null) window.clearTimeout(persistTimer.current)
+    persistTimer.current = window.setTimeout(() => persistColumns(columns), 300)
+    return () => {
+      if (persistTimer.current != null)
+        window.clearTimeout(persistTimer.current)
+    }
+  }, [columns])
+
+  return useMemo(() => ({ columns, setColumns }), [columns, setColumns])
+}

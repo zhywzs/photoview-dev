@@ -1,15 +1,13 @@
 import React, {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from 'react'
 import { useQuery } from '@apollo/client'
-import VirtualGrid from './VirtualGrid'
+import VirtualGrid, { type TileVisual } from './VirtualGrid'
 import PhotoTile from './PhotoTile'
-import { COLUMN_LEVELS, useZoomLevels } from './useZoomLevels'
 import {
   GRID_GAP,
   GridLayout,
@@ -20,21 +18,9 @@ import {
   groupForIndex,
   indexAtY,
   isDenseLevel,
-  scrollForZoomAnchor,
   tileSizeForColumns,
 } from './gridLayout'
-import {
-  SETTLE_DURATION_MS,
-  TAP_SETTLE_DURATION_MS,
-  applyFollowTransform,
-  clearZoomTransform,
-  clampFollowScale,
-  commitLevelForVisualTile,
-  levelTiles,
-  prefersReducedMotion,
-  residualAt,
-  settleZoomTransform,
-} from './gridTransform'
+import { clampColumns, useGridZoom } from './gridZoom'
 import { MediaGalleryFields } from '../photoGallery/__generated__/MediaGalleryFields'
 import {
   AtlasTileMap,
@@ -44,12 +30,23 @@ import {
   mediaAtlasesVariables,
 } from './atlas'
 
-/** accumulated wheel delta that advances one zoom level */
+/** accumulated wheel delta that advances one zoom step */
 const WHEEL_LEVEL_THRESHOLD = 60
 /** how long the floating date bar stays visible after scrolling stops */
 const FLOATING_DATE_HIDE_DELAY = 1000
 /** taps within this window after a pinch are swallowed */
 const PINCH_TAP_SWALLOW_MS = 350
+/** delay after the last zoom step before the new grouping is committed */
+const ZOOM_SETTLE_MS = 150
+/** how long the zoom anchor stays active after the last zoom step */
+const ZOOM_ANCHOR_LINGER_MS = 600
+/**
+ * Single atlas sheet size for every zoom level. Because the image source no
+ * longer depends on the zoom level, zooming never swaps or re-fetches an
+ * image: only the tile container changes size, which is what keeps the zoom
+ * itself perfectly smooth.
+ */
+const ATLAS_TILE_SIZE = 256
 
 type PhotoGridProps<T extends MediaGalleryFields> = {
   /** Sectioned data (e.g. timeline grouped by day). Mutually exclusive with `items`. */
@@ -64,71 +61,40 @@ type PhotoGridProps<T extends MediaGalleryFields> = {
   /** id of the currently active (selected) media */
   activeId?: string
   /**
-   * Controlled zoom level (index into COLUMN_LEVELS). The timeline passes
-   * its own state so the date grouping granularity can follow the zoom.
+   * Column count the current `sections` were grouped for. While the user
+   * zooms, the grid keeps using this grouping (and its dense/sparse mode) so
+   * date headers and group boundaries do not jump mid-gesture; the new column
+   * count is reported through `onColumnsChange` once the zoom settles and the
+   * parent re-groups.
    */
-  zoomLevel?: number
-  onZoomLevelChange?: (level: number) => void
-}
-
-/** Follow-layer state of an active pinch gesture. */
-type PinchState = {
-  /** finger distance at gesture start (pre-commit follow baseline) */
-  startDist: number
-  /** rendered tile size of the gesture-start level */
-  baseTile: number
-  /** committed level index */
-  level: number
-  /** tile size per level for the current container width */
-  tiles: number[]
-  /** untransformed host rect, used to map viewport anchors into the element */
-  rect: DOMRect
-  // --- post-commit follow state (incremental model) ---
-  /** finger distance at the last commit (delta baseline) */
-  commitDist: number
-  /** residual scale applied at the last commit */
-  residual: number
-  /** timestamp of the last commit */
-  commitTime: number
-  /** most recent finger distance (also readable when the fingers pause) */
-  lastDist: number
-  /** transform origin at commit time, in element coordinates */
-  originX: number
-  originY: number
-}
-
-/** Transform applied after a level commit renders, before paint. */
-type PendingResidual = {
-  scale: number
-  viewportX: number
-  viewportY: number
-  /** settle duration in ms, or false to keep following (pinch commits) */
-  settle: number | false
+  modeColumns?: number
+  /** Called once a zoom gesture has settled, with the new column count. */
+  onColumnsChange?(columns: number): void
 }
 
 /**
- * The photo grid: virtualized, zoomable in discrete column levels
- * (3 / 5 / 15 / 30 photos per row) and mobile friendly.
+ * The photo grid: virtualized, zoomable and mobile friendly.
  *
  * Zoom interaction
  * ----------------
- *  - pinch: photos track the fingers 1:1 through a CSS transform on the
- *    grid host (no layout work per frame). When the visual tile size
- *    crosses the geometric midpoint between two levels, the new level's
- *    layout takes over: the scroll is restored so the anchored photo
- *    stays under the fingers, and the size difference is applied as a
- *    residual transform that is folded into the follow baseline - the
- *    takeover is visually seamless and the follow continues exactly
- *    where the fingers are. On release the residual settles to identity.
- *  - double tap: toggles between the current level and the previous one,
- *    with a residual + settle transition from the tap point
- *  - ctrl + wheel / trackpad pinch: accumulates until a level changes
+ *  - the zoom is a *continuous column count* in [MIN_COLUMNS, MAX_COLUMNS].
+ *    A pinch maps the finger distance straight to a tile size, which is
+ *    quantized to the nearest column count and reflows the grid one column at
+ *    a time. There is no full-grid scale transform: the tile containers
+ *    change size/position and each image loads independently.
+ *  - the content point under the fingers is kept fixed by restoring the
+ *    scroll for the new layout, and the surviving tiles are FLIP-animated
+ *    from their previous position/size, so the change reads as continuous.
+ *  - double tap toggles between the sparse (5) and dense (15) views; ctrl +
+ *    wheel / trackpad pinch steps one column at a time.
+ *  - the date grouping is frozen while zooming and only recomputed once the
+ *    gesture settles.
  *
  * Date display
  * ------------
- *  - levels with few columns render sticky section header bars
- *  - levels with many columns render no headers; instead a floating date
- *    pill appears while scrolling and fades out after 1s of inactivity
+ *  - sparse modes render sticky section header bars
+ *  - dense modes render no headers; instead a floating date pill appears
+ *    while scrolling and fades out after 1s of inactivity
  */
 const PhotoGrid = <T extends MediaGalleryFields>({
   sections: sectionsProp,
@@ -137,23 +103,13 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   onItemActivate,
   onItemFavorite,
   activeId,
-  zoomLevel: controlledLevel,
-  onZoomLevelChange,
+  modeColumns,
+  onColumnsChange,
 }: PhotoGridProps<T>) => {
-  const internalZoom = useZoomLevels()
-
-  // in controlled mode the parent owns the level (e.g. the timeline,
-  // whose date grouping granularity follows the zoom level)
-  const zoom = useMemo(() => {
-    if (controlledLevel == null) return internalZoom
-    return {
-      level: controlledLevel,
-      setLevel: (level: number) =>
-        onZoomLevelChange != null
-          ? onZoomLevelChange(level)
-          : internalZoom.setLevel(level),
-    }
-  }, [controlledLevel, onZoomLevelChange, internalZoom])
+  const zoom = useGridZoom()
+  const columns = zoom.columns
+  const columnsRef = useRef(columns)
+  columnsRef.current = columns
 
   const sections = useMemo<GridSectionData<T>[]>(() => {
     if (sectionsProp != null) return sectionsProp
@@ -161,13 +117,20 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     return []
   }, [sectionsProp, items])
 
-  const columns = COLUMN_LEVELS[zoom.level]
+  // while zooming, the layout mode follows the grouping the parent gave us
+  // (which lags until the zoom settles), so headers/gaps stay put during the
+  // gesture and only switch once the new grouping arrives
+  const mode = modeColumns ?? columns
   const hasTitles = sections.some(s => s.title != null)
-  const dense = isDenseLevel(columns)
+  const dense = isDenseLevel(mode)
+  const gap = dense ? 0 : GRID_GAP
   const renderHeaders = hasTitles && !dense
   const floatingDates = hasTitles && dense
 
-  // dense levels render the whole list as one seamless block: all sections
+  const gapRef = useRef(gap)
+  gapRef.current = gap
+
+  // dense modes render the whole list as one seamless block: all sections
   // are flattened so no group boundary interrupts the photo wall. The group
   // start indexes are kept for the floating date overlay.
   const { layoutSections, dateGroups } = useMemo(() => {
@@ -183,23 +146,45 @@ const PhotoGrid = <T extends MediaGalleryFields>({
 
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   const layoutRef = useRef<GridLayout | null>(null)
-  const levelRef = useRef(zoom.level)
-  levelRef.current = zoom.level
+  const tileRegistryRef = useRef<Map<string, HTMLDivElement>>(new Map())
+  const pendingRectsRef = useRef<Map<string, TileVisual> | null>(null)
 
-  // ---- thumbnail atlas (all levels) ----
-  // Two atlas sizes: 128px tiles for dense levels (15/30 columns),
-  // 256px tiles for sparse levels (3/5 columns). Both load a whole
-  // screen in a few requests; the tile size is chosen so the atlas
-  // tile is at least as large as the CSS tile (DPR 1 quality, softer
-  // on high-DPR screens - the user opens the viewer for details).
+  // ---- settle: report the new column count and drop the anchor ----
+  const onColumnsChangeRef = useRef(onColumnsChange)
+  onColumnsChangeRef.current = onColumnsChange
+  const settleTimerRef = useRef<number | undefined>(undefined)
+  const anchorTimerRef = useRef<number | undefined>(undefined)
+
+  const scheduleSettle = useCallback(() => {
+    if (settleTimerRef.current != null)
+      window.clearTimeout(settleTimerRef.current)
+    if (anchorTimerRef.current != null)
+      window.clearTimeout(anchorTimerRef.current)
+
+    settleTimerRef.current = window.setTimeout(() => {
+      onColumnsChangeRef.current?.(columnsRef.current)
+    }, ZOOM_SETTLE_MS)
+    anchorTimerRef.current = window.setTimeout(() => {
+      setZoomAnchor(null)
+    }, ZOOM_ANCHOR_LINGER_MS)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (settleTimerRef.current != null)
+        window.clearTimeout(settleTimerRef.current)
+      if (anchorTimerRef.current != null)
+        window.clearTimeout(anchorTimerRef.current)
+    }
+  }, [])
+
+  // ---- thumbnail atlas (one size for every zoom level) ----
   const [tileSize, setTileSize] = useState(0)
 
   const onLayoutChange = useCallback((layout: GridLayout) => {
     layoutRef.current = layout
     setTileSize(layout.tileSize)
   }, [])
-
-  const atlasTileSize = dense ? 128 : 256
 
   const atlasIds = useMemo(
     () =>
@@ -211,7 +196,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     mediaAtlases,
     mediaAtlasesVariables
   >(MEDIA_ATLASES_QUERY, {
-    variables: { ids: atlasIds, tileSize: atlasTileSize },
+    variables: { ids: atlasIds, tileSize: ATLAS_TILE_SIZE },
     skip: atlasIds.length == 0 || tileSize == 0,
     fetchPolicy: 'no-cache',
   })
@@ -219,16 +204,14 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   const incomingAtlasMap = useMemo(() => buildAtlasMap(atlasData), [atlasData])
 
   // ---- atlas sheet loading (on demand) ----
-  // A tile references exactly one sheet at a time, so sheets are downloaded
-  // only for tiles that are (or are about to become) visible. A tile is moved
-  // over to a newer sheet only once that sheet has decoded, which keeps the
-  // previous image on screen across a zoom instead of flashing empty.
+  // Sheets are fetched only for tiles that are (or are about to become)
+  // visible, and a tile moves to a newer sheet only once that sheet has
+  // decoded, so the previous image stays on screen instead of flashing.
   const loadedAtlasUrlsRef = useRef<Set<string>>(new Set())
   const loadingAtlasUrlsRef = useRef<Set<string>>(new Set())
   const [atlasTick, setAtlasTick] = useState(0)
   const tickRafRef = useRef(0)
 
-  // coalesce all sheet loads finishing in the same frame into one render
   const bumpAtlasTick = useCallback(() => {
     if (tickRafRef.current != 0) return
     tickRafRef.current = window.requestAnimationFrame(() => {
@@ -253,15 +236,12 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         bumpAtlasTick()
       }
       preload.onload = done
-      // an errored sheet must not retry forever; allow the swap anyway
       preload.onerror = done
       preload.src = url
     },
     [bumpAtlasTick]
   )
 
-  // live (displayed) map: keep a tile on its old sheet until the new one is
-  // ready, and prune tiles for media that is no longer in the list at all
   const atlasMapRef = useRef<AtlasTileMap>(new Map())
   const atlasMap = useMemo(() => {
     const live = atlasMapRef.current
@@ -282,8 +262,6 @@ const PhotoGrid = <T extends MediaGalleryFields>({
 
   const visibleRangeRef = useRef<[number, number]>([-1, -1])
 
-  // Keep the sheets for the rendered tiles warm. This is what makes a tile
-  // that appears after a scroll or a zoom show up immediately.
   const onVisibleRange = useCallback(
     (first: number, last: number) => {
       visibleRangeRef.current = [first, last]
@@ -299,15 +277,13 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   )
 
   /**
-   * Predictively load the sheets for the photos a zoom to `targetLevel` will
-   * reveal, so they are already in the browser cache and appear the instant
-   * the zoom commits instead of popping in one by one. Uses the sheet
-   * metadata already known for the current level, so no extra query.
+   * Predictively load the sheets for the photos a zoom to `targetColumns`
+   * will reveal, so they are already cached and show up as soon as they
+   * mount rather than popping in one by one.
    */
   const prefetchZoomLevel = useCallback(
-    (targetLevel: number) => {
-      const level = Math.max(0, Math.min(COLUMN_LEVELS.length - 1, targetLevel))
-      const cols = COLUMN_LEVELS[level]
+    (targetColumns: number) => {
+      const cols = clampColumns(targetColumns)
       const levelGap = isDenseLevel(cols) ? 0 : GRID_GAP
       const width = wrapperRef.current?.clientWidth || window.innerWidth
       const tile = tileSizeForColumns(width, cols, levelGap)
@@ -328,112 +304,60 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     },
     [atlasIds, incomingAtlasMap, preloadAtlasSheet]
   )
-
   const prefetchZoomLevelRef = useRef(prefetchZoomLevel)
   prefetchZoomLevelRef.current = prefetchZoomLevel
 
-  // extra overscan while a pinch has committed: the residual transform
-  // scales the rendered rows, and the virtualizer needs to cover the
-  // scaled-up viewport area
-  const [extraOverscan, setExtraOverscan] = useState(false)
+  // ---- zoom ----
+  const [zoomAnchor, setZoomAnchor] = useState<ZoomAnchor | null>(null)
 
-  const activeAnchorRef = useRef<ZoomAnchor | null>(null)
-  const pendingResidualRef = useRef<PendingResidual | null>(null)
-  const pinchRef = useRef<PinchState | null>(null)
-  const cancelSettleRef = useRef<(() => void) | null>(null)
-  const wheelAccRef = useRef(0)
-  const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null)
-  const alternateLevelRef = useRef<number | null>(null)
-  const pinchEndAtRef = useRef(0)
+  const captureAnchor = useCallback((clientY: number): ZoomAnchor | null => {
+    const layout = layoutRef.current
+    if (layout == null || layout.itemCount == 0) return null
+    return captureZoomAnchor(layout, window.scrollY + clientY, clientY)
+  }, [])
 
-  /**
-   * Commit to a new zoom level. Captures a scroll anchor at the gesture
-   * point, asks React to render the new level and schedules the residual
-   * transform that keeps the view continuous across the takeover.
-   */
-  const commitLevel = useCallback(
-    (
-      level: number,
-      anchorX: number,
-      anchorY: number,
-      residualScale: number,
-      settle: number | false
-    ) => {
-      const layout = layoutRef.current
-      if (layout != null && layout.itemCount > 0) {
-        activeAnchorRef.current = captureZoomAnchor(
-          layout,
-          window.scrollY + anchorY,
-          anchorY
-        )
-        pendingResidualRef.current = {
-          scale: residualScale,
-          viewportX: anchorX,
-          viewportY: anchorY,
-          settle,
-        }
-      } else {
-        activeAnchorRef.current = null
-        pendingResidualRef.current = null
+  const applyZoom = useCallback(
+    (targetColumns: number, clientY: number) => {
+      const clamped = clampColumns(targetColumns)
+      if (clamped === columnsRef.current) return
+
+      // capture the current visual rects *before* the layout changes, so a
+      // zoom step that interrupts an in-flight animation continues from
+      // wherever the tiles are right now (no jump)
+      const rects = new Map<string, TileVisual>()
+      const scrollX = window.scrollX
+      const scrollY = window.scrollY
+      for (const [id, el] of tileRegistryRef.current) {
+        const rect = el.getBoundingClientRect()
+        rects.set(id, {
+          x: rect.left + scrollX,
+          y: rect.top + scrollY,
+          w: rect.width,
+        })
       }
-      zoom.setLevel(level)
+      pendingRectsRef.current = rects
+
+      const anchor = captureAnchor(clientY)
+      if (anchor != null) setZoomAnchor(anchor)
+
+      zoom.setColumns(clamped)
+      prefetchZoomLevelRef.current(clamped)
+      scheduleSettle()
     },
-    [zoom]
+    [captureAnchor, zoom, scheduleSettle]
   )
 
-  // keep a stable ref so the gesture listeners never need to re-register
-  const commitLevelRef = useRef(commitLevel)
-  commitLevelRef.current = commitLevel
+  // stable ref so the once-registered gesture listeners always see the latest
+  const applyZoomRef = useRef(applyZoom)
+  applyZoomRef.current = applyZoom
 
-  // after the new level's layout is committed (before paint): restore the
-  // anchor scroll and apply the residual transform around the anchor
-  useLayoutEffect(() => {
-    const anchor = activeAnchorRef.current
-    if (anchor != null) {
-      activeAnchorRef.current = null
-      const layout = layoutRef.current
-      if (layout != null) {
-        window.scrollTo(0, scrollForZoomAnchor(anchor, layout))
-      }
-    }
-
-    const residual = pendingResidualRef.current
-    const host = wrapperRef.current
-    if (residual != null && host != null) {
-      pendingResidualRef.current = null
-
-      cancelSettleRef.current?.()
-      cancelSettleRef.current = null
-
-      // neutralize the transform to measure the untransformed box
-      host.style.transition = 'none'
-      host.style.transform = 'none'
-      const rect = host.getBoundingClientRect()
-
-      applyFollowTransform(
-        host,
-        residual.scale,
-        residual.viewportX - rect.left,
-        residual.viewportY - rect.top
-      )
-
-      // keep the pinch baseline fresh for subsequent follow frames: the
-      // scroll restore moved the element in the viewport, so the element
-      // rect and the follow origin must be recomputed from it
-      if (pinchRef.current != null) {
-        pinchRef.current.rect = rect
-        pinchRef.current.originX = residual.viewportX - rect.left
-        pinchRef.current.originY = residual.viewportY - rect.top
-      }
-
-      if (residual.settle !== false) {
-        cancelSettleRef.current = settleZoomTransform(
-          host,
-          prefersReducedMotion() ? 0 : residual.settle
-        )
-      }
-    }
-  }, [zoom.level])
+  // ---- gesture state ----
+  const pinchRef = useRef<{ startDist: number; startTile: number } | null>(
+    null
+  )
+  const wheelAccRef = useRef(0)
+  const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null)
+  const pinchEndAtRef = useRef(0)
 
   // ---- gestures (native listeners so preventDefault works) ----
   useEffect(() => {
@@ -446,83 +370,21 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         touches[0].clientY - touches[1].clientY
       )
 
-    const touchMidX = (touches: TouchList) =>
-      (touches[0].clientX + touches[1].clientX) / 2
-
-    const touchMidY = (touches: TouchList) =>
-      (touches[0].clientY + touches[1].clientY) / 2
-
-    const clampLevel = (level: number) =>
-      Math.max(0, Math.min(COLUMN_LEVELS.length - 1, level))
-
-    /**
-     * Time-driven absorption of the commit residual: keeps writing the
-     * follow transform on every animation frame until the residual has
-     * fully collapsed to 1, *independently of touchmove events*. This is
-     * what makes the photos glide to the exact tile size of the committed
-     * level even when the fingers stop right at the threshold.
-     */
-    let absorbRaf = 0
-    const runAbsorption = () => {
-      if (absorbRaf != 0) return // already running
-      const step = () => {
-        absorbRaf = 0
-        const pinch = pinchRef.current
-        if (pinch == null || pinch.commitDist <= 0) return
-
-        const elapsed = Date.now() - pinch.commitTime
-        const residual = residualAt(pinch.residual, elapsed)
-        const delta =
-          (pinch.lastDist > 0 ? pinch.lastDist : pinch.commitDist) /
-          pinch.commitDist
-        const scale = clampFollowScale(
-          delta * residual,
-          pinch.level,
-          pinch.tiles.length - 1
-        )
-        applyFollowTransform(elem, scale, pinch.originX, pinch.originY)
-
-        if (residual != 1) {
-          absorbRaf = window.requestAnimationFrame(step)
-        }
-      }
-      absorbRaf = window.requestAnimationFrame(step)
-    }
-    const cancelAbsorption = () => {
-      if (absorbRaf != 0) window.cancelAnimationFrame(absorbRaf)
-      absorbRaf = 0
-    }
+    const touchMidY = (touches: TouchList) => (touches[0].clientY + touches[1].clientY) / 2
 
     const onTouchStart = (event: TouchEvent) => {
-      if (event.touches.length == 2) {
-        event.preventDefault()
-
-        // start from a clean identity transform; if a settle animation is
-        // still in flight it snaps to its end state (a small, rare jump)
-        cancelAbsorption()
-        cancelSettleRef.current?.()
-        cancelSettleRef.current = null
-        clearZoomTransform(elem)
-        setExtraOverscan(false)
-
-        const dist = touchDistance(event.touches)
-        const tiles = levelTiles(elem.clientWidth)
-        pinchRef.current = {
-          startDist: dist,
-          baseTile: tiles[levelRef.current],
-          level: levelRef.current,
-          tiles,
-          rect: elem.getBoundingClientRect(),
-          commitDist: 0,
-          residual: 1,
-          commitTime: 0,
-          lastDist: dist,
-          originX: 0,
-          originY: 0,
-        }
-
-        // warm the sheets the first zoom-out step will reveal
-        prefetchZoomLevelRef.current(levelRef.current + 1)
+      if (event.touches.length != 2) return
+      event.preventDefault()
+      const layout = layoutRef.current
+      pinchRef.current = {
+        startDist: touchDistance(event.touches),
+        startTile:
+          layout?.tileSize ??
+          tileSizeForColumns(
+            elem.clientWidth,
+            columnsRef.current,
+            gapRef.current
+          ),
       }
     }
 
@@ -533,72 +395,13 @@ const PhotoGrid = <T extends MediaGalleryFields>({
 
       const dist = touchDistance(event.touches)
       if (dist <= 0 || pinch.startDist <= 0) return
-      pinch.lastDist = dist
 
-      const midX = touchMidX(event.touches)
-      const midY = touchMidY(event.touches)
-
-      // follow transform: finger increment since the last commit, multiplied
-      // by a residual factor that absorbs towards 1 after the commit so the
-      // photos glide to the exact tile size of the committed level even when
-      // the fingers stop right at the threshold
-      const committed = pinch.commitDist > 0
-      const delta = committed ? dist / pinch.commitDist : dist / pinch.startDist
-      const residual = committed
-        ? residualAt(pinch.residual, Date.now() - pinch.commitTime)
-        : 1
-      const scale = clampFollowScale(
-        delta * residual,
-        pinch.level,
-        pinch.tiles.length - 1
+      // fingers apart -> bigger tiles -> fewer columns
+      const targetTile = pinch.startTile * (dist / pinch.startDist)
+      const targetColumns = Math.round(
+        (elem.clientWidth + gapRef.current) / (targetTile + gapRef.current)
       )
-      const visualTile = pinch.baseTile * scale
-
-      const newLevel = commitLevelForVisualTile(
-        pinch.level,
-        visualTile,
-        pinch.tiles
-      )
-
-      if (newLevel != null) {
-        // the new level takes over; the size difference becomes a residual
-        // that absorbs over the next frames (no jump, no lingering
-        // off-size state), and the follow continues from the finger delta
-        const targetTile = pinch.tiles[newLevel]
-        const residualScale = visualTile / targetTile
-
-        // warm the sheets for this level and, in case the pinch continues,
-        // for the next step in the same direction
-        const step = newLevel - pinch.level
-        prefetchZoomLevelRef.current(newLevel)
-        prefetchZoomLevelRef.current(newLevel + step)
-
-        commitLevelRef.current(newLevel, midX, midY, residualScale, false)
-
-        pinch.commitDist = dist
-        pinch.residual = residualScale
-        pinch.commitTime = Date.now()
-        pinch.baseTile = targetTile
-        pinch.level = newLevel
-        pinch.originX = midX - pinch.rect.left
-        pinch.originY = midY - pinch.rect.top
-
-        // while the residual is > 1 the visible area shrinks; while < 1 the
-        // viewport needs more rows than usual - render extra around it
-        setExtraOverscan(true)
-
-        // drive the absorption by time, not by finger events
-        runAbsorption()
-      } else if (committed) {
-        applyFollowTransform(elem, scale, pinch.originX, pinch.originY)
-      } else {
-        applyFollowTransform(
-          elem,
-          scale,
-          midX - pinch.rect.left,
-          midY - pinch.rect.top
-        )
-      }
+      applyZoomRef.current(targetColumns, touchMidY(event.touches))
     }
 
     const onTouchEnd = (event: TouchEvent) => {
@@ -608,20 +411,10 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         pinchRef.current = null
         pinchEndAtRef.current = Date.now()
         lastTapRef.current = null // a pinch release must not count as a tap
-
-        // stop the time-driven absorption: the CSS settle below takes over
-        // and finishes the glide to the exact tile size
-        cancelAbsorption()
-        cancelSettleRef.current?.()
-        cancelSettleRef.current = settleZoomTransform(
-          elem,
-          prefersReducedMotion() ? 0 : SETTLE_DURATION_MS,
-          () => setExtraOverscan(false)
-        )
         return
       }
 
-      // double tap: toggle between the current level and the previous one
+      // double tap: toggle between the sparse and dense views
       if (
         !wasPinch &&
         event.changedTouches.length == 1 &&
@@ -638,24 +431,9 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         ) {
           event.preventDefault()
           lastTapRef.current = null
-
-          const current = levelRef.current
-          const alternate =
-            alternateLevelRef.current ?? (current === 0 ? 2 : 0)
-          alternateLevelRef.current = current
-
-          if (alternate != current) {
-            const tiles = levelTiles(elem.clientWidth)
-            const residual = tiles[current] / tiles[alternate]
-            prefetchZoomLevelRef.current(alternate)
-            commitLevelRef.current(
-              alternate,
-              touch.clientX,
-              touch.clientY,
-              residual,
-              TAP_SETTLE_DURATION_MS
-            )
-          }
+          const current = columnsRef.current
+          const target = current <= 5 ? 15 : 5
+          if (target != current) applyZoomRef.current(target, touch.clientY)
         } else {
           lastTapRef.current = {
             time: now,
@@ -666,7 +444,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       }
     }
 
-    // desktop / trackpad pinch (ctrl + wheel)
+    // desktop / trackpad pinch (ctrl + wheel): one column per threshold
     const onWheel = (event: WheelEvent) => {
       if (!event.ctrlKey && !event.metaKey) return
       event.preventDefault()
@@ -682,20 +460,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       if (direction == 0) return
       wheelAccRef.current = 0
 
-      const current = levelRef.current
-      const newLevel = clampLevel(current + direction)
-      if (newLevel == current) return
-
-      const tiles = levelTiles(elem.clientWidth)
-      const residual = tiles[current] / tiles[newLevel]
-      prefetchZoomLevelRef.current(newLevel)
-      commitLevelRef.current(
-        newLevel,
-        event.clientX,
-        event.clientY,
-        residual,
-        SETTLE_DURATION_MS
-      )
+      applyZoomRef.current(columnsRef.current + direction, event.clientY)
     }
 
     // Safari fires proprietary gesture events for page pinch zoom
@@ -715,10 +480,6 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       elem.removeEventListener('wheel', onWheel)
       elem.removeEventListener('gesturestart', onGestureStart)
       elem.removeEventListener('gesturechange', onGestureStart)
-      cancelAbsorption()
-      cancelSettleRef.current?.()
-      cancelSettleRef.current = null
-      clearZoomTransform(elem)
     }
   }, [])
 
@@ -747,8 +508,6 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         const layout = layoutRef.current
         if (layout == null || layout.itemCount == 0) return
 
-        // the layout is a single flat block in dense mode; map the flat
-        // index back to its date group for the overlay
         const index = indexAtY(layout, window.scrollY + 8)
         const group = groupForIndex(dateGroupsRef.current, index)
         const title: string | undefined = group?.title
@@ -796,20 +555,21 @@ const PhotoGrid = <T extends MediaGalleryFields>({
 
   return (
     <>
-      {/* the wrapper is transformed as a whole during pinch gestures,
-          so it must contain only the grid (overlays stay outside) */}
       <div ref={wrapperRef} style={{ touchAction: 'pan-y' }}>
         <VirtualGrid
           sections={layoutSections}
           columns={columns}
-          gap={dense ? 0 : undefined}
+          gap={gap}
           renderHeaders={renderHeaders}
-          overscanRows={extraOverscan ? 8 : 3}
+          overscanRows={3}
           itemKey={itemKey}
           renderItem={renderItem}
           renderSectionTitle={renderSectionTitle}
           onLayoutChange={onLayoutChange}
           onVisibleRange={onVisibleRange}
+          zoomAnchor={zoomAnchor}
+          tiles={tileRegistryRef}
+          pendingRects={pendingRectsRef}
         />
       </div>
 
