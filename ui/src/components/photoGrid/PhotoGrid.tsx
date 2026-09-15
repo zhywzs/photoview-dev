@@ -557,12 +557,25 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       window.requestAnimationFrame(() => finishMorphRef.current(1))
     }
 
+    // the browser can cancel a touch (e.g. a system gesture); make sure a
+    // morph in flight still resolves instead of freezing mid-way
+    const onTouchCancel = () => {
+      if (pinchRef.current == null && morphStateRef.current == null) return
+      pinchRef.current = null
+      if (morphStateRef.current != null) {
+        finishMorphRef.current(
+          morphStateRef.current.progress >= 0.4 ? 1 : 0
+        )
+      }
+    }
+
     // Safari fires proprietary gesture events for page pinch zoom
     const onGestureStart = (event: Event) => event.preventDefault()
 
     elem.addEventListener('touchstart', onTouchStart, { passive: false })
     elem.addEventListener('touchmove', onTouchMove, { passive: false })
     elem.addEventListener('touchend', onTouchEnd, { passive: false })
+    elem.addEventListener('touchcancel', onTouchCancel, { passive: false })
     elem.addEventListener('wheel', onWheel, { passive: false })
     elem.addEventListener('gesturestart', onGestureStart)
     elem.addEventListener('gesturechange', onGestureStart)
@@ -571,6 +584,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       elem.removeEventListener('touchstart', onTouchStart)
       elem.removeEventListener('touchmove', onTouchMove)
       elem.removeEventListener('touchend', onTouchEnd)
+      elem.removeEventListener('touchcancel', onTouchCancel)
       elem.removeEventListener('wheel', onWheel)
       elem.removeEventListener('gesturestart', onGestureStart)
       elem.removeEventListener('gesturechange', onGestureStart)
@@ -651,28 +665,14 @@ const PhotoGrid = <T extends MediaGalleryFields>({
 
   return (
     <>
-      <div ref={wrapperRef} style={{ touchAction: 'pan-y' }}>
-        {morph != null ? (
-          <MorphLayer
-            sections={sections}
-            flatItems={flatItems}
-            width={wrapperRef.current?.clientWidth || window.innerWidth}
-            fromColumns={COLUMN_LEVELS[morph.fromLevel]}
-            fromDense={isDenseLevel(COLUMN_LEVELS[morph.fromLevel])}
-            toColumns={COLUMN_LEVELS[morph.toLevel]}
-            toDense={isDenseLevel(COLUMN_LEVELS[morph.toLevel])}
-            fromRects={morph.fromRects}
-            fromHeight={morph.fromHeight}
-            anchorId={morph.anchorId}
-            anchorScreenY={morph.anchorScreenY}
-            containerDocTop={morph.containerDocTop}
-            scrollY={morph.scrollY}
-            viewportHeight={window.innerHeight || 800}
-            itemKey={itemKey}
-            renderItem={renderItem}
-            handleRef={morphHandleRef}
-          />
-        ) : (
+      <div
+        ref={wrapperRef}
+        style={{ touchAction: 'pan-y', position: 'relative' }}
+      >
+        {/* The grid stays mounted (just hidden) during a morph: removing the
+            tile the finger is on would make the browser cancel the touch
+            sequence and the morph would freeze. */}
+        <div style={{ opacity: morph != null ? 0 : 1 }}>
           <VirtualGrid
             sections={layoutSections}
             columns={columns}
@@ -686,6 +686,38 @@ const PhotoGrid = <T extends MediaGalleryFields>({
             onVisibleRange={onVisibleRange}
             handleRef={gridHandleRef}
           />
+        </div>
+
+        {morph != null && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              pointerEvents: 'none',
+            }}
+          >
+            <MorphLayer
+              sections={sections}
+              flatItems={flatItems}
+              width={wrapperRef.current?.clientWidth || window.innerWidth}
+              fromColumns={COLUMN_LEVELS[morph.fromLevel]}
+              fromDense={isDenseLevel(COLUMN_LEVELS[morph.fromLevel])}
+              toColumns={COLUMN_LEVELS[morph.toLevel]}
+              toDense={isDenseLevel(COLUMN_LEVELS[morph.toLevel])}
+              fromRects={morph.fromRects}
+              fromHeight={morph.fromHeight}
+              anchorId={morph.anchorId}
+              anchorScreenY={morph.anchorScreenY}
+              containerDocTop={morph.containerDocTop}
+              scrollY={morph.scrollY}
+              viewportHeight={window.innerHeight || 800}
+              itemKey={itemKey}
+              renderItem={renderItem}
+              handleRef={morphHandleRef}
+            />
+          </div>
         )}
       </div>
 
