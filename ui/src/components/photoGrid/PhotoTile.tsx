@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import classNames from 'classnames'
-import { gql, useMutation } from '@apollo/client'
+import { gql, useMutation, useApolloClient } from '@apollo/client'
 import { useTranslation } from 'react-i18next'
 import { ProtectedImage } from '../photoGallery/ProtectedMedia'
 import { MediaType } from '../../__generated__/globalTypes'
@@ -16,6 +16,8 @@ const DELETE_MEDIA_MUTATION = gql`
 
 /** how long to hold before a long-press is registered (ms) */
 const LONG_PRESS_MS = 500
+/** duration of the delete fall animation on the tile */
+const TILE_DELETE_MS = 350
 
 /** hover actions render only on devices with a real mouse */
 const canHover =
@@ -65,9 +67,11 @@ const PhotoTile = ({
 
   // ---- long-press to delete (mobile) ----
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [deleteMedia, { loading: deleteLoading }] = useMutation<{
     deleteMedia: boolean
   }>(DELETE_MEDIA_MUTATION)
+  const apolloClient = useApolloClient()
 
   const longPressTimer = useRef<number | undefined>(undefined)
   const longPressTriggered = useRef(false)
@@ -102,8 +106,22 @@ const PhotoTile = ({
 
   const confirmDelete = useCallback(() => {
     setShowDeleteConfirm(false)
-    deleteMedia({ variables: { mediaId: media.id } }).catch(() => {})
-  }, [deleteMedia, media.id])
+
+    // play the fall animation, then delete and evict from cache
+    setDeleting(true)
+    window.setTimeout(() => {
+      deleteMedia({ variables: { mediaId: media.id } })
+        .then(() => {
+          // evict the media from the Apollo cache so all queries
+          // (timeline, albums, search) re-render without it
+          apolloClient.cache.evict({ id: `Media:${media.id}` })
+          apolloClient.cache.gc()
+        })
+        .catch(() => {
+          setDeleting(false)
+        })
+    }, TILE_DELETE_MS)
+  }, [deleteMedia, media.id, apolloClient])
 
   return (
     <div
@@ -118,6 +136,14 @@ const PhotoTile = ({
         height: tileSize,
         borderRadius: radius,
         cursor: 'pointer',
+        ...(deleting
+          ? {
+              transform: 'translateY(80px) rotate(15deg) scale(0.1)',
+              opacity: 0,
+              transition: `transform ${TILE_DELETE_MS}ms cubic-bezier(0.4, 0, 1, 1), opacity ${TILE_DELETE_MS}ms ease-in`,
+              pointerEvents: 'none' as const,
+            }
+          : {}),
       }}
       onClick={handleClick}
       onTouchStart={startLongPress}

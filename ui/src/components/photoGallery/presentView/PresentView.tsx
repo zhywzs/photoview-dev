@@ -5,7 +5,7 @@ import React, {
   useState,
 } from 'react'
 import styled from 'styled-components'
-import { gql, useMutation } from '@apollo/client'
+import { gql, useMutation, useApolloClient } from '@apollo/client'
 import { useTranslation } from 'react-i18next'
 import PresentMedia from './PresentMedia'
 import PresentControls from './PresentControls'
@@ -122,6 +122,7 @@ const PresentView = ({
   const [deleteMedia, { loading: deleteLoading }] = useMutation<{
     deleteMedia: boolean
   }>(DELETE_MEDIA_MUTATION)
+  const apolloClient = useApolloClient()
 
   // ---- neighbor previews (lazy) ----
   const [neighborsReady, setNeighborsReady] = useState(false)
@@ -225,6 +226,9 @@ const PresentView = ({
       deleteMedia({ variables: { mediaId: activeMedia.id } })
         .then(() => {
           setDeleting(false)
+          // evict from cache so grid queries re-render without it
+          apolloClient.cache.evict({ id: `Media:${activeMedia.id}` })
+          apolloClient.cache.gc()
           // navigate to next image, or close if this was the last one
           const isLast = hasList && activeIndex === mediaList!.length - 1
           if (isLast || (hasList && mediaList!.length <= 1)) {
@@ -238,7 +242,7 @@ const PresentView = ({
           setDeleting(false)
         })
     }, DELETE_ANIMATION_MS)
-  }, [activeMedia.id, deleteMedia, dispatchMedia, closeViewer, hasList, activeIndex, mediaList])
+  }, [activeMedia.id, deleteMedia, dispatchMedia, closeViewer, hasList, activeIndex, mediaList, apolloClient])
 
   // ---- keyboard ----
   useEffect(() => {
