@@ -214,25 +214,61 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     fetchPolicy: 'no-cache',
   })
 
+  // Atlas sprite sheets are swapped in only after they have been preloaded
+  // and decoded. Crossing the dense/sparse boundary changes the atlas tile
+  // size (128 <-> 256), which means brand new sheet URLs; without gating the
+  // swap every tile would flash empty while its new sheet downloads.
+  const loadedAtlasUrlsRef = useRef<Set<string>>(new Set())
+  const loadingAtlasUrlsRef = useRef<Set<string>>(new Set())
+  const [atlasTick, setAtlasTick] = useState(0)
+
+  useEffect(() => {
+    for (const sheet of atlasData?.mediaAtlases ?? []) {
+      const url = sheet.url
+      if (
+        loadedAtlasUrlsRef.current.has(url) ||
+        loadingAtlasUrlsRef.current.has(url)
+      ) {
+        continue
+      }
+      loadingAtlasUrlsRef.current.add(url)
+      const preload = new Image()
+      const done = () => {
+        loadingAtlasUrlsRef.current.delete(url)
+        loadedAtlasUrlsRef.current.add(url)
+        // re-render so tiles can move over to the freshly decoded sheet
+        setAtlasTick(tick => tick + 1)
+      }
+      preload.onload = done
+      // an errored sheet must not retry forever; show it anyway
+      preload.onerror = done
+      preload.src = url
+    }
+  }, [atlasData])
+
   // The atlas query is keyed on the full id list, so it re-runs whenever
-  // the list changes (e.g. after deleting a photo) and its data is briefly
-  // undefined. Accumulate the resolved tiles instead of replacing them, so
-  // the whole wall does not blank out during that gap; only tiles for media
-  // that is really gone are pruned.
+  // the list changes (e.g. after deleting a photo) or the tile size changes
+  // (zoom) and its data is briefly undefined. Keep the resolved tiles and
+  // only replace a tile once its new sheet is ready, so the wall never blanks
+  // out; tiles for media that is really gone are pruned.
   const atlasMapRef = useRef<AtlasTileMap>(new Map())
   const atlasMap = useMemo(() => {
     const incoming = buildAtlasMap(atlasData)
+    const live = atlasMapRef.current
     for (const [mediaId, tile] of incoming) {
-      atlasMapRef.current.set(mediaId, tile)
+      const sheetReady =
+        loadedAtlasUrlsRef.current.has(tile.url) || !live.has(mediaId)
+      if (sheetReady) live.set(mediaId, tile)
     }
     if (atlasIds.length > 0) {
-      const live = new Set(atlasIds)
-      for (const mediaId of Array.from(atlasMapRef.current.keys())) {
-        if (!live.has(mediaId)) atlasMapRef.current.delete(mediaId)
+      const idSet = new Set(atlasIds)
+      for (const mediaId of Array.from(live.keys())) {
+        if (!idSet.has(mediaId)) live.delete(mediaId)
       }
     }
-    return new Map(atlasMapRef.current)
-  }, [atlasData, atlasIds])
+    return new Map(live)
+    // atlasTick re-runs this once a preloaded sheet is decoded and ready
+  }, [atlasData, atlasIds, atlasTick])
 
   // extra overscan while a pinch has committed: the residual transform
   // scales the rendered rows, and the virtualizer needs to cover the

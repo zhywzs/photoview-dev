@@ -10,7 +10,7 @@ const isNativeLazyLoadSupported = 'loading' in document.createElement('img')
 const placeholder =
   'data:image/gif;base64,R0lGODlhAQABAPAAAAAAAAAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=='
 
-const getProtectedUrl = (url?: string) => {
+export const getProtectedUrl = (url?: string) => {
   if (url == undefined) return undefined
 
   const imgUrl = new URL(url, location.origin)

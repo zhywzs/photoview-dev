@@ -52,14 +52,14 @@ type ViewportState = {
   bottom: number
 }
 
-/** One rendered tile: its identity and its position inside its section. */
+/** One rendered tile: its identity and its absolute position in the grid. */
 type GridEntry<T> = {
   id: string
   item: T
   absoluteIndex: number
-  /** top offset inside the owning section (already below its header) */
+  /** absolute top offset inside the grid container */
   top: number
-  /** left offset inside the section */
+  /** left offset inside the grid container */
   left: number
 }
 
@@ -75,13 +75,18 @@ type Move = {
  * Renders only the rows of the sections that intersect the viewport, so the
  * DOM stays small (~columns x visible rows) even with thousands of items.
  *
- * Every tile is a keyed, absolutely positioned box. Keying by media id (and
- * not by position) means a list change - most importantly deleting a photo -
- * reuses the existing DOM nodes: photos slide to fill the gap and their
- * already loaded images stay put instead of flashing. The slide is a FLIP
- * animation (measure the old position from the previous layout, transform
- * from there to zero) that is only armed when the geometry (tile size,
- * columns, width) is unchanged, so zooming and resizing do not fight it.
+ * Every tile is a keyed, absolutely positioned box and all tiles are siblings
+ * in a single flat list, regardless of the section (= date group) they belong
+ * to. Keeping one stable list is what makes zooming smooth: changing the zoom
+ * level changes the date grouping and the tile size, but the tile DOM nodes
+ * (and therefore their decoded images) survive, so only their position/size
+ * changes. Section headers are rendered in a separate overlay layer and never
+ * take part in the tile list.
+ *
+ * The list change that does need animation - deleting a photo - is handled
+ * with a FLIP: survivors are transformed from their previous position to
+ * zero. FLIP is only armed while the geometry (tile size, columns, width) is
+ * unchanged, so the zoom host transform is never fought.
  */
 const VirtualGrid = <T,>({
   sections,
@@ -174,6 +179,7 @@ const VirtualGrid = <T,>({
       : layout.tileSize
 
   const visibleSections = useMemo(() => {
+    const rowPitch = layout.tileSize + gap
     return layout.sections
       .map(section => {
         const rowRange = visibleRowRange(
@@ -195,8 +201,7 @@ const VirtualGrid = <T,>({
           (lastRow + 1) * section.cols
         )
 
-        const topBase = section.hasHeader ? layout.headerHeight : 0
-        const rowPitch = layout.tileSize + gap
+        const gridTop = section.offset + (section.hasHeader ? layout.headerHeight : 0)
         const entries: GridEntry<T>[] = []
         for (let i = start; i < end; i++) {
           const item = sectionData.items[i]
@@ -205,7 +210,7 @@ const VirtualGrid = <T,>({
             id: itemKey(item),
             item,
             absoluteIndex: section.firstIndex + i,
-            top: topBase + Math.floor(i / section.cols) * rowPitch,
+            top: gridTop + Math.floor(i / section.cols) * rowPitch,
             left: (i % section.cols) * horizontalPitch,
           })
         }
@@ -223,20 +228,17 @@ const VirtualGrid = <T,>({
     itemKey,
   ])
 
-  // ---- FLIP bookkeeping ----
-  const sectionRefs = useRef(new Map<string, HTMLDivElement>())
-  const tileRefs = useRef(new Map<string, HTMLDivElement>())
-  const prevTilePos = useRef(
-    new Map<string, { top: number; left: number; sectionKey: string }>()
+  // Flat list of every visible tile, all siblings in one container so React
+  // reuses their DOM nodes across zoom level changes.
+  const entries = useMemo(
+    () => visibleSections.flatMap(section => section.entries),
+    [visibleSections]
   )
-  const prevSectionOffsets = useRef(new Map<string, number>())
-  const prevSig = useRef<string | null>(null)
 
-  const registerSection = useCallback((el: HTMLDivElement | null) => {
-    if (el == null) return
-    const key = el.dataset.sectionKey
-    if (key != null) sectionRefs.current.set(key, el)
-  }, [])
+  // ---- FLIP bookkeeping ----
+  const tileRefs = useRef(new Map<string, HTMLDivElement>())
+  const prevTilePos = useRef(new Map<string, { top: number; left: number }>())
+  const prevSig = useRef<string | null>(null)
 
   const registerTile = useCallback((el: HTMLDivElement | null) => {
     if (el == null) return
@@ -259,43 +261,21 @@ const VirtualGrid = <T,>({
     // transform), so FLIP would fight it.
     const canAnimate = prevSig.current === sig && !prefersReducedMotion()
 
-    const nextTilePos = new Map<
-      string,
-      { top: number; left: number; sectionKey: string }
-    >()
-    const nextSectionOffsets = new Map<string, number>()
+    const nextPos = new Map<string, { top: number; left: number }>()
     const moves: Move[] = []
 
-    for (const { section, entries } of visibleSections) {
-      nextSectionOffsets.set(section.key, section.offset)
+    for (const entry of entries) {
+      nextPos.set(entry.id, { top: entry.top, left: entry.left })
+      if (!canAnimate) continue
 
-      if (canAnimate) {
-        const sectionEl = sectionRefs.current.get(section.key)
-        const prevOffset = prevSectionOffsets.current.get(section.key)
-        if (sectionEl != null && prevOffset != null) {
-          const dy = prevOffset - section.offset
-          if (Math.abs(dy) >= FLIP_MIN_PX) moves.push({ el: sectionEl, dx: 0, dy })
-        }
-      }
+      const tileEl = tileRefs.current.get(entry.id)
+      const prev = prevTilePos.current.get(entry.id)
+      if (tileEl == null || prev == null) continue
 
-      for (const entry of entries) {
-        nextTilePos.set(entry.id, {
-          top: entry.top,
-          left: entry.left,
-          sectionKey: section.key,
-        })
-
-        if (!canAnimate) continue
-        const tileEl = tileRefs.current.get(entry.id)
-        const prev = prevTilePos.current.get(entry.id)
-        if (tileEl == null || prev == null || prev.sectionKey !== section.key)
-          continue
-
-        const dx = prev.left - entry.left
-        const dy = prev.top - entry.top
-        if (Math.abs(dx) >= FLIP_MIN_PX || Math.abs(dy) >= FLIP_MIN_PX) {
-          moves.push({ el: tileEl, dx, dy })
-        }
+      const dx = prev.left - entry.left
+      const dy = prev.top - entry.top
+      if (Math.abs(dx) >= FLIP_MIN_PX || Math.abs(dy) >= FLIP_MIN_PX) {
+        moves.push({ el: tileEl, dx, dy })
       }
     }
 
@@ -316,64 +296,64 @@ const VirtualGrid = <T,>({
 
     // prune refs for nodes that are gone, then remember this layout
     for (const id of Array.from(tileRefs.current.keys())) {
-      if (!nextTilePos.has(id)) tileRefs.current.delete(id)
-    }
-    for (const key of Array.from(sectionRefs.current.keys())) {
-      if (!nextSectionOffsets.has(key)) sectionRefs.current.delete(key)
+      if (!nextPos.has(id)) tileRefs.current.delete(id)
     }
 
-    prevTilePos.current = nextTilePos
-    prevSectionOffsets.current = nextSectionOffsets
+    prevTilePos.current = nextPos
     prevSig.current = sig
-  }, [visibleSections, layout, gap, renderHeaders, renderWidth])
+  }, [entries, layout, gap, renderHeaders, renderWidth])
 
   return (
     <div ref={containerRef} style={{ position: 'relative', width: '100%' }}>
       <div style={{ height: layout.totalHeight, position: 'relative' }}>
-        {visibleSections.map(({ section, entries }) => (
-          <div
-            key={section.key}
-            ref={registerSection}
-            data-section-key={section.key}
-            style={{
-              position: 'absolute',
-              top: section.offset,
-              left: 0,
-              right: 0,
-              height: section.height,
-            }}
-          >
-            {section.hasHeader && (
+        {/* section headers live in their own overlay layer so that the tile
+            list below stays a single, stable set of DOM nodes */}
+        {renderHeaders &&
+          visibleSections.map(({ section }) =>
+            section.hasHeader ? (
               <div
-                style={{
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 10,
-                  height: SECTION_HEADER_HEIGHT,
-                }}
-                className="backdrop-blur bg-white/85 dark:bg-dark-bg/85"
-              >
-                {renderSectionTitle
-                  ? renderSectionTitle(section.title!, section.key)
-                  : defaultSectionTitle(section.title!)}
-              </div>
-            )}
-            {entries.map(entry => (
-              <div
-                key={entry.id}
-                ref={registerTile}
-                data-tile-id={entry.id}
+                key={`header:${section.key}`}
                 style={{
                   position: 'absolute',
-                  top: entry.top,
-                  left: entry.left,
-                  width: tileWidth,
-                  height: tileWidth,
+                  top: section.offset,
+                  left: 0,
+                  right: 0,
+                  height: section.height,
+                  pointerEvents: 'none',
+                  zIndex: 10,
                 }}
               >
-                {renderItem(entry.item, entry.absoluteIndex, tileWidth)}
+                <div
+                  style={{
+                    position: 'sticky',
+                    top: 0,
+                    height: SECTION_HEADER_HEIGHT,
+                    pointerEvents: 'auto',
+                  }}
+                  className="backdrop-blur bg-white/85 dark:bg-dark-bg/85"
+                >
+                  {renderSectionTitle
+                    ? renderSectionTitle(section.title!, section.key)
+                    : defaultSectionTitle(section.title!)}
+                </div>
               </div>
-            ))}
+            ) : null
+          )}
+
+        {entries.map(entry => (
+          <div
+            key={entry.id}
+            ref={registerTile}
+            data-tile-id={entry.id}
+            style={{
+              position: 'absolute',
+              top: entry.top,
+              left: entry.left,
+              width: tileWidth,
+              height: tileWidth,
+            }}
+          >
+            {renderItem(entry.item, entry.absoluteIndex, tileWidth)}
           </div>
         ))}
       </div>

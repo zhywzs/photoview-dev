@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import classNames from 'classnames'
 import { gql, useMutation, useApolloClient } from '@apollo/client'
 import { useTranslation } from 'react-i18next'
-import { ProtectedImage } from '../photoGallery/ProtectedMedia'
+import { ProtectedImage, getProtectedUrl } from '../photoGallery/ProtectedMedia'
 import { MediaType } from '../../__generated__/globalTypes'
 import { MediaGalleryFields } from '../photoGallery/__generated__/MediaGalleryFields'
 import { AtlasTile } from './atlas'
@@ -25,6 +25,49 @@ const canHover =
   typeof window !== 'undefined' &&
   typeof window.matchMedia == 'function' &&
   window.matchMedia('(hover: hover) and (pointer: fine)').matches
+
+/**
+ * Like ProtectedImage, but keeps showing the previous source until the new
+ * one has finished loading. Thumbnail renditions are picked per tile size, so
+ * zooming would otherwise blank a tile until the new rendition arrives.
+ */
+interface StableImageProps {
+  src?: string
+  className?: string
+  lazyLoading?: boolean
+  blurhash?: string | null
+}
+
+const StableImage = ({ src, ...props }: StableImageProps) => {
+  const [displaySrc, setDisplaySrc] = useState(src)
+
+  useEffect(() => {
+    if (src === displaySrc) return
+    if (src == null) {
+      setDisplaySrc(undefined)
+      return
+    }
+
+    let cancelled = false
+    const preload = new Image()
+    const done = () => {
+      if (!cancelled) setDisplaySrc(src)
+    }
+    preload.onload = done
+    preload.onerror = done
+    const url = getProtectedUrl(src)
+    if (url != null) {
+      preload.src = url
+    } else {
+      setDisplaySrc(src)
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [src, displaySrc])
+
+  return <ProtectedImage src={displaySrc} {...props} />
+}
 
 type PhotoTileProps = {
   media: MediaGalleryFields
@@ -170,7 +213,7 @@ const PhotoTile = ({
           }}
         />
       ) : (
-        <ProtectedImage
+        <StableImage
           className="w-full h-full object-cover"
           src={src}
           blurhash={showBlurhash ? media.blurhash : null}
