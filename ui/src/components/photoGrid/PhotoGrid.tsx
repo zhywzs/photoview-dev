@@ -11,6 +11,7 @@ import VirtualGrid from './VirtualGrid'
 import PhotoTile from './PhotoTile'
 import { COLUMN_LEVELS, useZoomLevels } from './useZoomLevels'
 import {
+  GRID_GAP,
   GridLayout,
   GridSectionData,
   ZoomAnchor,
@@ -20,6 +21,7 @@ import {
   indexAtY,
   isDenseLevel,
   scrollForZoomAnchor,
+  tileSizeForColumns,
 } from './gridLayout'
 import {
   SETTLE_DURATION_MS,
@@ -214,48 +216,56 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     fetchPolicy: 'no-cache',
   })
 
-  // Atlas sprite sheets are swapped in only after they have been preloaded
-  // and decoded. Crossing the dense/sparse boundary changes the atlas tile
-  // size (128 <-> 256), which means brand new sheet URLs; without gating the
-  // swap every tile would flash empty while its new sheet downloads.
+  const incomingAtlasMap = useMemo(() => buildAtlasMap(atlasData), [atlasData])
+
+  // ---- atlas sheet loading (on demand) ----
+  // A tile references exactly one sheet at a time, so sheets are downloaded
+  // only for tiles that are (or are about to become) visible. A tile is moved
+  // over to a newer sheet only once that sheet has decoded, which keeps the
+  // previous image on screen across a zoom instead of flashing empty.
   const loadedAtlasUrlsRef = useRef<Set<string>>(new Set())
   const loadingAtlasUrlsRef = useRef<Set<string>>(new Set())
   const [atlasTick, setAtlasTick] = useState(0)
+  const tickRafRef = useRef(0)
 
-  useEffect(() => {
-    for (const sheet of atlasData?.mediaAtlases ?? []) {
-      const url = sheet.url
+  // coalesce all sheet loads finishing in the same frame into one render
+  const bumpAtlasTick = useCallback(() => {
+    if (tickRafRef.current != 0) return
+    tickRafRef.current = window.requestAnimationFrame(() => {
+      tickRafRef.current = 0
+      setAtlasTick(tick => tick + 1)
+    })
+  }, [])
+
+  const preloadAtlasSheet = useCallback(
+    (url: string) => {
       if (
         loadedAtlasUrlsRef.current.has(url) ||
         loadingAtlasUrlsRef.current.has(url)
       ) {
-        continue
+        return
       }
       loadingAtlasUrlsRef.current.add(url)
       const preload = new Image()
       const done = () => {
         loadingAtlasUrlsRef.current.delete(url)
         loadedAtlasUrlsRef.current.add(url)
-        // re-render so tiles can move over to the freshly decoded sheet
-        setAtlasTick(tick => tick + 1)
+        bumpAtlasTick()
       }
       preload.onload = done
-      // an errored sheet must not retry forever; show it anyway
+      // an errored sheet must not retry forever; allow the swap anyway
       preload.onerror = done
       preload.src = url
-    }
-  }, [atlasData])
+    },
+    [bumpAtlasTick]
+  )
 
-  // The atlas query is keyed on the full id list, so it re-runs whenever
-  // the list changes (e.g. after deleting a photo) or the tile size changes
-  // (zoom) and its data is briefly undefined. Keep the resolved tiles and
-  // only replace a tile once its new sheet is ready, so the wall never blanks
-  // out; tiles for media that is really gone are pruned.
+  // live (displayed) map: keep a tile on its old sheet until the new one is
+  // ready, and prune tiles for media that is no longer in the list at all
   const atlasMapRef = useRef<AtlasTileMap>(new Map())
   const atlasMap = useMemo(() => {
-    const incoming = buildAtlasMap(atlasData)
     const live = atlasMapRef.current
-    for (const [mediaId, tile] of incoming) {
+    for (const [mediaId, tile] of incomingAtlasMap) {
       const sheetReady =
         loadedAtlasUrlsRef.current.has(tile.url) || !live.has(mediaId)
       if (sheetReady) live.set(mediaId, tile)
@@ -267,8 +277,60 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       }
     }
     return new Map(live)
-    // atlasTick re-runs this once a preloaded sheet is decoded and ready
-  }, [atlasData, atlasIds, atlasTick])
+    // atlasTick re-runs this once a preloaded sheet has decoded
+  }, [incomingAtlasMap, atlasIds, atlasTick])
+
+  const visibleRangeRef = useRef<[number, number]>([-1, -1])
+
+  // Keep the sheets for the rendered tiles warm. This is what makes a tile
+  // that appears after a scroll or a zoom show up immediately.
+  const onVisibleRange = useCallback(
+    (first: number, last: number) => {
+      visibleRangeRef.current = [first, last]
+      if (first < 0) return
+      for (let i = first; i <= last; i++) {
+        const id = atlasIds[i]
+        if (id == null) continue
+        const tile = incomingAtlasMap.get(id) ?? atlasMapRef.current.get(id)
+        if (tile != null) preloadAtlasSheet(tile.url)
+      }
+    },
+    [atlasIds, incomingAtlasMap, preloadAtlasSheet]
+  )
+
+  /**
+   * Predictively load the sheets for the photos a zoom to `targetLevel` will
+   * reveal, so they are already in the browser cache and appear the instant
+   * the zoom commits instead of popping in one by one. Uses the sheet
+   * metadata already known for the current level, so no extra query.
+   */
+  const prefetchZoomLevel = useCallback(
+    (targetLevel: number) => {
+      const level = Math.max(0, Math.min(COLUMN_LEVELS.length - 1, targetLevel))
+      const cols = COLUMN_LEVELS[level]
+      const levelGap = isDenseLevel(cols) ? 0 : GRID_GAP
+      const width = wrapperRef.current?.clientWidth || window.innerWidth
+      const tile = tileSizeForColumns(width, cols, levelGap)
+      const rowPitch = tile + levelGap
+      const rows = Math.ceil((window.innerHeight || 800) / rowPitch) + 2
+
+      const [first, last] = visibleRangeRef.current
+      const anchor = first < 0 ? 0 : Math.floor((first + last) / 2)
+      const start = Math.max(0, anchor - cols)
+      const end = Math.min(atlasIds.length, anchor + rows * cols)
+
+      for (let i = start; i < end; i++) {
+        const id = atlasIds[i]
+        if (id == null) continue
+        const tileInfo = atlasMapRef.current.get(id) ?? incomingAtlasMap.get(id)
+        if (tileInfo != null) preloadAtlasSheet(tileInfo.url)
+      }
+    },
+    [atlasIds, incomingAtlasMap, preloadAtlasSheet]
+  )
+
+  const prefetchZoomLevelRef = useRef(prefetchZoomLevel)
+  prefetchZoomLevelRef.current = prefetchZoomLevel
 
   // extra overscan while a pinch has committed: the residual transform
   // scales the rendered rows, and the virtualizer needs to cover the
@@ -458,6 +520,9 @@ const PhotoGrid = <T extends MediaGalleryFields>({
           originX: 0,
           originY: 0,
         }
+
+        // warm the sheets the first zoom-out step will reveal
+        prefetchZoomLevelRef.current(levelRef.current + 1)
       }
     }
 
@@ -501,6 +566,12 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         // off-size state), and the follow continues from the finger delta
         const targetTile = pinch.tiles[newLevel]
         const residualScale = visualTile / targetTile
+
+        // warm the sheets for this level and, in case the pinch continues,
+        // for the next step in the same direction
+        const step = newLevel - pinch.level
+        prefetchZoomLevelRef.current(newLevel)
+        prefetchZoomLevelRef.current(newLevel + step)
 
         commitLevelRef.current(newLevel, midX, midY, residualScale, false)
 
@@ -576,6 +647,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
           if (alternate != current) {
             const tiles = levelTiles(elem.clientWidth)
             const residual = tiles[current] / tiles[alternate]
+            prefetchZoomLevelRef.current(alternate)
             commitLevelRef.current(
               alternate,
               touch.clientX,
@@ -616,6 +688,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
 
       const tiles = levelTiles(elem.clientWidth)
       const residual = tiles[current] / tiles[newLevel]
+      prefetchZoomLevelRef.current(newLevel)
       commitLevelRef.current(
         newLevel,
         event.clientX,
@@ -736,6 +809,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
           renderItem={renderItem}
           renderSectionTitle={renderSectionTitle}
           onLayoutChange={onLayoutChange}
+          onVisibleRange={onVisibleRange}
         />
       </div>
 

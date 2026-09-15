@@ -45,6 +45,11 @@ type VirtualGridProps<T> = {
   renderSectionTitle?: (title: string, sectionKey: string) => React.ReactNode
   /** Called whenever the layout is recomputed (width / columns / data changed) */
   onLayoutChange?: (layout: GridLayout) => void
+  /**
+   * Called with the absolute index range of the rendered items (including
+   * overscan). Lets the parent prefetch assets for what is on screen.
+   */
+  onVisibleRange?: (first: number, last: number) => void
 }
 
 type ViewportState = {
@@ -98,6 +103,7 @@ const VirtualGrid = <T,>({
   renderItem,
   renderSectionTitle,
   onLayoutChange,
+  onVisibleRange,
 }: VirtualGridProps<T>) => {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [width, setWidth] = useState(0)
@@ -234,6 +240,22 @@ const VirtualGrid = <T,>({
     () => visibleSections.flatMap(section => section.entries),
     [visibleSections]
   )
+
+  // report which absolute indices are rendered (parent uses it to prefetch)
+  useLayoutEffect(() => {
+    if (onVisibleRange == null) return
+    if (entries.length == 0) {
+      onVisibleRange(-1, -1)
+      return
+    }
+    let first = entries[0].absoluteIndex
+    let last = entries[0].absoluteIndex
+    for (const entry of entries) {
+      if (entry.absoluteIndex < first) first = entry.absoluteIndex
+      if (entry.absoluteIndex > last) last = entry.absoluteIndex
+    }
+    onVisibleRange(first, last)
+  }, [entries, onVisibleRange])
 
   // ---- FLIP bookkeeping ----
   const tileRefs = useRef(new Map<string, HTMLDivElement>())
