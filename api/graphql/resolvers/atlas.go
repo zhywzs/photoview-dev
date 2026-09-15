@@ -2,6 +2,7 @@ package resolvers
 
 import (
 	"context"
+	"fmt"
 	"path"
 
 	"github.com/photoview/photoview/api/graphql/auth"
@@ -39,6 +40,12 @@ func (r *queryResolver) MediaAtlases(ctx context.Context, ids []int, tileSize *i
 	for _, sheet := range atlases {
 		endpoint := utils.ApiEndpointUrl()
 		endpoint.Path = path.Join(endpoint.Path, "atlas", sheet.FileName)
+		// cache-busting: the filename is deterministic, so regenerating
+		// the atlas doesn't change it. The version parameter forces
+		// the browser to fetch the new image when the atlas is rebuilt.
+		q := endpoint.Query()
+		q.Set("v", fmt.Sprintf("%d", sheet.UpdatedAt.Unix()))
+		endpoint.RawQuery = q.Encode()
 
 		entries := make([]*models.MediaAtlasEntry, 0, len(sheet.Entries))
 		for _, entry := range sheet.Entries {

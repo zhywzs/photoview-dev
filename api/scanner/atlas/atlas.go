@@ -85,7 +85,7 @@ func regenerateAtlasesForUser(db *gorm.DB, user *models.User) error {
 		Joins("JOIN user_albums ON user_albums.album_id = albums.id AND user_albums.user_id = ?", user.ID).
 		Joins("LEFT JOIN media_urls tiny ON tiny.media_id = media.id AND tiny.purpose = ?", models.PhotoThumbnailTiny).
 		Joins("LEFT JOIN media_urls small ON small.media_id = media.id AND small.purpose = ?", models.PhotoThumbnailSmall).
-		Where("media.type = ?", models.MediaTypePhoto).
+		Where("media.type = ? AND media.deleted_at IS NULL", models.MediaTypePhoto).
 		Where("tiny.media_name IS NOT NULL AND small.media_name IS NOT NULL").
 		Order("media.date_shot DESC, media.id DESC").
 		Scan(&media).Error
