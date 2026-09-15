@@ -376,6 +376,14 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       morphStateRef.current = state
       setMorph(state)
       prefetchZoomLevelRef.current(toLevel)
+
+      // MorphLayer mounts on the next commit; as soon as it has a handle,
+      // push the progress we already have so the very first frame is right
+      // (otherwise a quick gesture could finish before anything moved).
+      window.requestAnimationFrame(() => {
+        const current = morphStateRef.current
+        if (current != null) morphHandleRef.current?.setProgress(current.progress)
+      })
     },
     []
   )
@@ -435,10 +443,9 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       if (dist <= 0 || pinch.startDist <= 0) return
       const scale = dist / pinch.startDist
 
-      const state = morphStateRef.current
-      if (state == null) {
+      if (morphStateRef.current == null) {
         // wait until the gesture clearly indicates a direction
-        if (Math.abs(scale - 1) < 0.04) return
+        if (Math.abs(scale - 1) < 0.03) return
         const direction = scale < 1 ? 1 : -1
         const toLevel = Math.max(
           0,
@@ -446,20 +453,26 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         )
         if (toLevel == pinch.startLevel) return
         beginMorphRef.current(toLevel, touchMidY(event.touches))
-        return
       }
 
-      // map the finger scale onto the morph progress [0, 1]
+      const state = morphStateRef.current
+      if (state == null) return
+
+      // Map the finger scale onto the morph progress [0, 1]. The morph is
+      // complete at the geometric midpoint between the two tile sizes (the
+      // point the old level switch used), so one gesture crosses a level
+      // without having to pinch all the way down to the target tile size.
       const fromTile = levelTile(state.fromLevel)
       const toTile = levelTile(state.toLevel)
       const visualTile = fromTile * scale
-      let p =
+      const midTile = Math.sqrt(fromTile * toTile)
+      const p =
         toTile < fromTile
-          ? (fromTile - visualTile) / (fromTile - toTile)
-          : (visualTile - fromTile) / (toTile - fromTile)
-      p = Math.max(0, Math.min(1, p))
-      state.progress = p
-      morphHandleRef.current?.setProgress(p)
+          ? (fromTile - visualTile) / (fromTile - midTile)
+          : (visualTile - fromTile) / (midTile - fromTile)
+      const clamped = Math.max(0, Math.min(1, p))
+      state.progress = clamped
+      morphHandleRef.current?.setProgress(clamped)
     }
 
     const onTouchEnd = (event: TouchEvent) => {
@@ -470,8 +483,10 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         pinchEndAtRef.current = Date.now()
         lastTapRef.current = null // a pinch release must not count as a tap
         if (morphStateRef.current != null) {
+          // a deliberate pinch in one direction should cross the level, so the
+          // commit threshold is forgiving
           finishMorphRef.current(
-            morphStateRef.current.progress >= 0.5 ? 1 : 0
+            morphStateRef.current.progress >= 0.4 ? 1 : 0
           )
         }
         return
