@@ -35,7 +35,7 @@ const UploadFab = ({ onUploaded }: UploadFabProps) => {
   const [uploadResult, setUploadResult] = useState<string | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const pendingFilesRef = useRef<FileList | null>(null)
+  const pendingFilesRef = useRef<File[] | null>(null)
   const lastScrollY = useRef(0)
 
   // ---- scroll visibility ----
@@ -71,7 +71,11 @@ const UploadFab = ({ onUploaded }: UploadFabProps) => {
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      pendingFilesRef.current = e.target.files
+      // Copy files to a plain array BEFORE resetting the input:
+      // e.target.files is a live FileList tied to the DOM element -
+      // setting value = '' below would clear it and leave
+      // pendingFilesRef pointing at an empty list.
+      pendingFilesRef.current = Array.from(e.target.files)
       setDest(computeDestination())
       setShowConfirm(true)
     }
