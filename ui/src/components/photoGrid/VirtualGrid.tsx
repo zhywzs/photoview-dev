@@ -15,18 +15,12 @@ import {
   SECTION_HEADER_HEIGHT,
 } from './gridLayout'
 import { prefersReducedMotion } from './gridTransform'
-import { type MorphCapture } from './MorphLayer'
 
 /** duration of the gap-closing slide when tiles reflow (e.g. after a delete) */
 const FLIP_DURATION_MS = 240
 const FLIP_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)'
 /** sub-pixel moves below this are ignored (avoids pointless animations) */
 const FLIP_MIN_PX = 0.5
-
-export type VirtualGridHandle = {
-  /** Measure the currently rendered tiles (container coords) for a morph. */
-  capture(): Map<string, MorphCapture>
-}
 
 type VirtualGridProps<T> = {
   sections: GridSectionData<T>[]
@@ -56,8 +50,14 @@ type VirtualGridProps<T> = {
    * overscan). Lets the parent prefetch assets for what is on screen.
    */
   onVisibleRange?: (first: number, last: number) => void
-  /** Populated with an imperative handle used to start a morph. */
-  handleRef?: React.MutableRefObject<VirtualGridHandle | null>
+  /**
+   * The layer is displayed with `translateY(offset) scale(scale)` about
+   * `viewportOriginY` (in the container's own coordinates). The virtualizer
+   * needs to know this to render the tiles that end up on screen.
+   */
+  viewportScale?: number
+  viewportOriginY?: number
+  viewportOffsetY?: number
 }
 
 type ViewportState = {
@@ -112,7 +112,9 @@ const VirtualGrid = <T,>({
   renderSectionTitle,
   onLayoutChange,
   onVisibleRange,
-  handleRef,
+  viewportScale = 1,
+  viewportOriginY = 0,
+  viewportOffsetY = 0,
 }: VirtualGridProps<T>) => {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [width, setWidth] = useState(0)
@@ -195,13 +197,23 @@ const VirtualGrid = <T,>({
 
   const visibleSections = useMemo(() => {
     const rowPitch = layout.tileSize + gap
+    // map the viewport back through `translateY(offset) scale(scale)` about
+    // the origin to get the range of container-local rows that end up visible
+    const invScale = viewportScale > 0 ? 1 / viewportScale : 1
+    const viewportTop =
+      viewportOriginY +
+      (viewport.top - viewportOriginY - viewportOffsetY) * invScale
+    const viewportBottom =
+      viewportOriginY +
+      (viewport.bottom - viewportOriginY - viewportOffsetY) * invScale
+
     return layout.sections
       .map(section => {
         const rowRange = visibleRowRange(
           section,
           layout,
-          viewport.top,
-          viewport.bottom,
+          viewportTop,
+          viewportBottom,
           overscanRows
         )
         if (rowRange == null) return null
@@ -241,6 +253,9 @@ const VirtualGrid = <T,>({
     gap,
     horizontalPitch,
     itemKey,
+    viewportScale,
+    viewportOriginY,
+    viewportOffsetY,
   ])
 
   // Flat list of every visible tile, all siblings in one container so React
@@ -271,37 +286,11 @@ const VirtualGrid = <T,>({
   const prevTilePos = useRef(new Map<string, { top: number; left: number }>())
   const prevSig = useRef<string | null>(null)
 
-  const entryIndexRef = useRef(new Map<string, number>())
-
   const registerTile = useCallback((el: HTMLDivElement | null) => {
     if (el == null) return
     const id = el.dataset.tileId
     if (id != null) tileRefs.current.set(id, el)
   }, [])
-
-  // imperative handle: measure the rendered tiles so a morph can start from
-  // exactly what is on screen right now
-  const capture = useCallback((): Map<string, MorphCapture> => {
-    const result = new Map<string, MorphCapture>()
-    const cRect = containerRef.current?.getBoundingClientRect()
-    if (cRect == null) return result
-    for (const [id, el] of tileRefs.current) {
-      const index = entryIndexRef.current.get(id)
-      if (index == null) continue
-      const r = el.getBoundingClientRect()
-      result.set(id, {
-        x: r.left - cRect.left,
-        y: r.top - cRect.top,
-        w: r.width,
-        index,
-      })
-    }
-    return result
-  }, [])
-
-  useEffect(() => {
-    if (handleRef != null) handleRef.current = { capture }
-  }, [handleRef, capture])
 
   useLayoutEffect(() => {
     const sig = [
@@ -355,10 +344,6 @@ const VirtualGrid = <T,>({
     for (const id of Array.from(tileRefs.current.keys())) {
       if (!nextPos.has(id)) tileRefs.current.delete(id)
     }
-
-    const nextIndex = new Map<string, number>()
-    for (const entry of entries) nextIndex.set(entry.id, entry.absoluteIndex)
-    entryIndexRef.current = nextIndex
 
     prevTilePos.current = nextPos
     prevSig.current = sig

@@ -6,20 +6,18 @@ import React, {
   useState,
 } from 'react'
 import { useQuery } from '@apollo/client'
-import VirtualGrid, { type VirtualGridHandle } from './VirtualGrid'
-import MorphLayer, {
-  type MorphCapture,
-  type MorphHandle,
-} from './MorphLayer'
+import VirtualGrid from './VirtualGrid'
 import PhotoTile from './PhotoTile'
 import {
   GRID_GAP,
   GridLayout,
   GridSectionData,
+  computeLayout,
   flattenSections,
   groupForIndex,
   indexAtY,
   isDenseLevel,
+  itemTop,
   tileSizeForColumns,
 } from './gridLayout'
 import { COLUMN_LEVELS, useZoomLevels } from './useZoomLevels'
@@ -39,28 +37,43 @@ const WHEEL_LEVEL_THRESHOLD = 60
 const FLOATING_DATE_HIDE_DELAY = 1000
 /** taps within this window after a pinch are swallowed */
 const PINCH_TAP_SWALLOW_MS = 350
-/** how long the morph takes to settle to an endpoint on release */
-const MORPH_SETTLE_MS = 260
+/** crossfade speed cap: at most full opacity in this many ms */
+const FADE_MS = 500
+/** how long an idle release settles visualTile to the level's tile size */
+const SETTLE_MS = 320
+/** a finger is considered idle after this long without a move */
+const IDLE_MS = 110
+/** how far past the midpoint a gesture must go to start a switch */
+const START_MARGIN = 0.04
+/** how far back past the start a switch must go to be cancelled */
+const REVERT_MARGIN = 0.06
 /** single atlas sheet size for every zoom level (no source change on zoom) */
 const ATLAS_TILE_SIZE = 256
 
-/** In-flight zoom morph between two precomputed layouts. */
-type MorphState = {
+/** In-flight crossfade between the committed level and the next one. */
+type Transition = {
   fromLevel: number
   toLevel: number
-  fromRects: Map<string, MorphCapture>
-  fromHeight: number
-  anchorId: string | null
-  anchorScreenY: number
-  containerDocTop: number
-  scrollY: number
-  progress: number
+  fromTile: number
+  toTile: number
+  midTile: number
+  baseAnchorTop: number
+  topAnchorTop: number
+  p: number
+  desired: number
+}
+
+type ViewProps = {
+  baseScale: number
+  topScale: number
+  originY: number
+  topOffset: number
 }
 
 type PhotoGridProps<T extends MediaGalleryFields> = {
   /** Sectioned data (e.g. timeline grouped by day). Mutually exclusive with `items`. */
   sections?: GridSectionData<T>[]
-  /** Flat data. Mutually exclusive with `sections`. */
+  /** Flat data. Mutually exclusive with `items`. */
   items?: T[]
   renderSectionTitle?: (title: string, sectionKey: string) => React.ReactNode
   /** Tap / click on a tile */
@@ -82,23 +95,23 @@ type PhotoGridProps<T extends MediaGalleryFields> = {
  *
  * Zoom interaction
  * ----------------
- * A pinch morphs continuously between two precomputed layouts (the current
- * level and the level the gesture heads towards). As soon as the gesture
- * starts, the union of both layouts is rendered: the photos that were off
- * screen at the current level are already parked just outside the viewport in
- * the target layout and slide in, while every photo interpolates from its
- * current position/size to its target one. Nothing is remounted or re-fetched
- * - the containers just move and the images inside stay (a single atlas size
- * is used at every level). On release the morph settles to the nearest level.
+ * The zoom is a layered crossfade, never a per-tile displacement:
  *
- * Double tap toggles between two levels and ctrl + wheel steps one level;
- * both run the same morph.
+ *  - the committed level is a single grid layer, scaled continuously by the
+ *    gesture about the pinch midpoint. Its tiles just grow/shrink, so they
+ *    read as "zooming one big image".
+ *  - when the visual tile size passes the midpoint to the next level, a second
+ *    layer (the target level) is mounted on top. Both layers are scaled so
+ *    their tiles have the *same on-screen size*; the target layer is offset so
+ *    the photo under the fingers coincides between layers.
+ *  - the two layers crossfade, driven by the gesture (reversible). The fade
+ *    cannot complete faster than FADE_MS, but continues on its own when the
+ *    fingers stop, so it always finishes. When the target layer reaches its
+ *    natural size it is committed and the old layer is unloaded.
  *
- * Date display
- * ------------
- *  - sparse levels render sticky section header bars
- *  - dense levels render no headers; a floating date pill appears while
- *    scrolling and fades out after 1s of inactivity
+ * Tiles are keyed and stay mounted (only opacity/transform change), a single
+ * atlas size is used at every level, and new photos load independently - so
+ * zooming never refetches or remounts the grid.
  */
 const PhotoGrid = <T extends MediaGalleryFields>({
   sections: sectionsProp,
@@ -112,8 +125,6 @@ const PhotoGrid = <T extends MediaGalleryFields>({
 }: PhotoGridProps<T>) => {
   const internalZoom = useZoomLevels()
 
-  // in controlled mode the parent owns the level (e.g. the timeline,
-  // whose date grouping granularity follows the zoom level)
   const zoom = useMemo(() => {
     if (controlledLevel == null) return internalZoom
     return {
@@ -131,18 +142,18 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     return []
   }, [sectionsProp, items])
 
-  const columns = COLUMN_LEVELS[zoom.level]
   const hasTitles = sections.some(s => s.title != null)
+  const columns = COLUMN_LEVELS[zoom.level]
   const dense = isDenseLevel(columns)
   const renderHeaders = hasTitles && !dense
   const floatingDates = hasTitles && dense
 
-  // dense levels render the whole list as one seamless block: all sections
-  // are flattened so no group boundary interrupts the photo wall. The group
-  // start indexes are kept for the floating date overlay.
   const { layoutSections, dateGroups } = useMemo(() => {
     if (!dense || sections.length == 0) {
-      return { layoutSections: sections, dateGroups: [] }
+      return {
+        layoutSections: sections,
+        dateGroups: [] as { firstIndex: number; title?: string }[],
+      }
     }
     const { items: flatItems, groups } = flattenSections(sections)
     return {
@@ -151,15 +162,24 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     }
   }, [sections, dense])
 
-  const wrapperRef = useRef<HTMLDivElement | null>(null)
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const baseLayerRef = useRef<HTMLDivElement | null>(null)
+  const topLayerRef = useRef<HTMLDivElement | null>(null)
   const layoutRef = useRef<GridLayout | null>(null)
   const levelRef = useRef(zoom.level)
   levelRef.current = zoom.level
 
+  // the top layer's level while a transition is running (null = no top layer)
+  const [topLevel, setTopLevel] = useState<number | null>(null)
+  const [viewProps, setViewProps] = useState<ViewProps>({
+    baseScale: 1,
+    topScale: 1,
+    originY: 0,
+    topOffset: 0,
+  })
+  const viewPropsRef = useRef(viewProps)
+
   // ---- thumbnail atlas (one size for every zoom level) ----
-  // A single 256px atlas is used at every level. Because the image source no
-  // longer depends on the zoom level, zooming never swaps or re-fetches a
-  // sheet - only the container changes, which keeps the morph free of flicker.
   const [tileSize, setTileSize] = useState(0)
 
   const onLayoutChange = useCallback((layout: GridLayout) => {
@@ -184,7 +204,6 @@ const PhotoGrid = <T extends MediaGalleryFields>({
 
   const incomingAtlasMap = useMemo(() => buildAtlasMap(atlasData), [atlasData])
 
-  // ---- atlas sheet loading (on demand) ----
   const loadedAtlasUrlsRef = useRef<Set<string>>(new Set())
   const loadingAtlasUrlsRef = useRef<Set<string>>(new Set())
   const [atlasTick, setAtlasTick] = useState(0)
@@ -235,7 +254,6 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       }
     }
     return new Map(live)
-    // atlasTick re-runs this once a preloaded sheet has decoded
   }, [incomingAtlasMap, atlasIds, atlasTick])
 
   const visibleRangeRef = useRef<[number, number]>([-1, -1])
@@ -259,10 +277,10 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       const level = Math.max(0, Math.min(COLUMN_LEVELS.length - 1, targetLevel))
       const cols = COLUMN_LEVELS[level]
       const levelGap = isDenseLevel(cols) ? 0 : GRID_GAP
-      const width = wrapperRef.current?.clientWidth || window.innerWidth
+      const width = hostRef.current?.clientWidth || window.innerWidth
       const tile = tileSizeForColumns(width, cols, levelGap)
       const rowPitch = tile + levelGap
-      const rows = Math.ceil((window.innerHeight || 800) / rowPitch) + 2
+      const rows = Math.ceil((window.innerHeight || 800) / rowPitch) + 4
 
       const [first, last] = visibleRangeRef.current
       const anchor = first < 0 ? 0 : Math.floor((first + last) / 2)
@@ -281,131 +299,277 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   const prefetchZoomLevelRef = useRef(prefetchZoomLevel)
   prefetchZoomLevelRef.current = prefetchZoomLevel
 
-  // ---- morph state ----
-  const flatItems = useMemo(() => flattenSections(sections).items, [sections])
-  const itemKey = useCallback((media: T) => media.id, [])
-  const allIds = useMemo(() => flatItems.map(itemKey), [flatItems, itemKey])
-  const allIdsRef = useRef(allIds)
-  allIdsRef.current = allIds
+  // ---- imperative gesture / crossfade engine ----
+  const sectionsRef = useRef(sections)
+  sectionsRef.current = sections
+  const hasTitlesRef = useRef(hasTitles)
+  hasTitlesRef.current = hasTitles
 
-  const gridHandleRef = useRef<VirtualGridHandle | null>(null)
-  const morphHandleRef = useRef<MorphHandle | null>(null)
-  const morphStateRef = useRef<MorphState | null>(null)
-  const settleRafRef = useRef(0)
+  const rafRef = useRef(0)
+  const lastFrameRef = useRef(0)
   const pendingScrollRef = useRef<number | null>(null)
-  const [morph, setMorph] = useState<MorphState | null>(null)
+  const transitionRef = useRef<Transition | null>(null)
+  const visualTileRef = useRef(0)
+  const settleTargetRef = useRef<number | null>(null)
+  const gestureRef = useRef({
+    active: false,
+    startDist: 0,
+    startVisual: 0,
+    lastDist: 0,
+    midX: 0,
+    midY: 0,
+    lastMoveTime: 0,
+  })
 
-  // apply the post-commit scroll once the new level's layout is on screen
-  // (before that the document height is still the old one and would clamp it)
-  React.useLayoutEffect(() => {
-    if (pendingScrollRef.current != null) {
-      window.scrollTo(0, pendingScrollRef.current)
-      pendingScrollRef.current = null
-    }
-  }, [zoom.level])
-
-  const commitMorph = useCallback(
-    (state: MorphState, target: number) => {
-      const offsetY = morphHandleRef.current?.getOffsetY() ?? 0
-      // fold the anchor offset into the scroll so the normal grid lines up
-      const newScroll = state.scrollY - offsetY
-      pendingScrollRef.current = newScroll
-      morphStateRef.current = null
-      setMorph(null)
-      zoom.setLevel(target >= 0.5 ? state.toLevel : state.fromLevel)
+  const tileValue = useCallback(
+    (level: number, host?: HTMLElement | null): number => {
+      const el = host ?? hostRef.current
+      const width = el?.clientWidth || window.innerWidth
+      const cols = COLUMN_LEVELS[level]
+      return tileSizeForColumns(width, cols, isDenseLevel(cols) ? 0 : GRID_GAP)
     },
-    [zoom]
+    []
   )
 
-  const finishMorph = useCallback(
-    (target: number) => {
-      const state = morphStateRef.current
-      if (state == null) return
-      if (settleRafRef.current != 0) {
-        window.cancelAnimationFrame(settleRafRef.current)
-        settleRafRef.current = 0
-      }
-      if (prefersReducedMotion()) {
-        morphHandleRef.current?.setProgress(target)
-        commitMorph(state, target)
-        return
-      }
-
-      const from = state.progress
-      const t0 = performance.now()
-      const step = (now: number) => {
-        const k = Math.min(1, (now - t0) / MORPH_SETTLE_MS)
-        const eased = 1 - Math.pow(1 - k, 3)
-        const p = from + (target - from) * eased
-        state.progress = p
-        morphHandleRef.current?.setProgress(p)
-        if (k < 1) {
-          settleRafRef.current = window.requestAnimationFrame(step)
-        } else {
-          settleRafRef.current = 0
-          commitMorph(state, target)
-        }
-      }
-      settleRafRef.current = window.requestAnimationFrame(step)
-    },
-    [commitMorph]
-  )
-
-  const beginMorph = useCallback(
-    (toLevel: number, anchorScreenY: number) => {
-      if (morphStateRef.current != null) return
-      const captured = gridHandleRef.current?.capture()
-      if (captured == null || captured.size == 0) return
-      const layout = layoutRef.current
-      const wrapper = wrapperRef.current
-      const containerDocTop =
-        (wrapper?.getBoundingClientRect().top ?? 0) + window.scrollY
-      const index =
-        layout != null ? indexAtY(layout, window.scrollY + anchorScreenY) : 0
-      const state: MorphState = {
-        fromLevel: levelRef.current,
-        toLevel,
-        fromRects: captured,
-        fromHeight: layout?.totalHeight ?? 0,
-        anchorId: allIdsRef.current[index] ?? null,
-        anchorScreenY,
-        containerDocTop,
-        scrollY: window.scrollY,
-        progress: 0,
-      }
-      morphStateRef.current = state
-      setMorph(state)
-      prefetchZoomLevelRef.current(toLevel)
-
-      // MorphLayer mounts on the next commit; as soon as it has a handle,
-      // push the progress we already have so the very first frame is right
-      // (otherwise a quick gesture could finish before anything moved).
-      window.requestAnimationFrame(() => {
-        const current = morphStateRef.current
-        if (current != null) morphHandleRef.current?.setProgress(current.progress)
+  const layoutForLevel = useCallback(
+    (level: number, width: number): GridLayout => {
+      const cols = COLUMN_LEVELS[level]
+      const isDense = isDenseLevel(cols)
+      const src = sectionsRef.current
+      const prepared =
+        isDense && src.length > 0
+          ? [{ key: '__dense__', items: flattenSections(src).items }]
+          : src
+      return computeLayout(prepared, width, cols, {
+        gap: isDense ? 0 : GRID_GAP,
+        renderHeaders: !isDense && hasTitlesRef.current,
       })
     },
     []
   )
 
-  const beginMorphRef = useRef(beginMorph)
-  beginMorphRef.current = beginMorph
-  const finishMorphRef = useRef(finishMorph)
-  finishMorphRef.current = finishMorph
+  const commitTransition = useCallback(
+    (t: Transition, originY: number) => {
+      const visual = visualTileRef.current
+      // fold the top layer's offset into the scroll so the committed grid
+      // (which has no offset) lines up exactly
+      const offset =
+        (t.baseAnchorTop - originY) * (visual / t.fromTile) -
+        (t.topAnchorTop - originY) * (visual / t.toTile)
+      pendingScrollRef.current = window.scrollY - offset
+      transitionRef.current = null
+      setTopLevel(null)
+      if (baseLayerRef.current != null) baseLayerRef.current.style.opacity = ''
+      levelRef.current = t.toLevel
+      zoom.setLevel(t.toLevel)
+      settleTargetRef.current = tileValue(t.toLevel)
+    },
+    [tileValue, zoom]
+  )
 
-  // ---- gesture state ----
-  const pinchRef = useRef<{
-    startDist: number
-    startLevel: number
-  } | null>(null)
+  const engineFrame = useRef<() => void>(() => undefined)
+  engineFrame.current = () => {
+    rafRef.current = 0
+    const host = hostRef.current
+    if (host == null) return
+    const now = performance.now()
+    const dt = lastFrameRef.current
+      ? Math.min(64, now - lastFrameRef.current)
+      : 16
+    lastFrameRef.current = now
+
+    const g = gestureRef.current
+    const rect = host.getBoundingClientRect()
+
+    // 1. current visual tile size
+    let visual = visualTileRef.current
+    if (g.active && g.startDist > 0) {
+      visual = g.startVisual * (g.lastDist / g.startDist)
+    } else if (settleTargetRef.current != null) {
+      const target = settleTargetRef.current
+      const k = Math.min(1, (dt / SETTLE_MS) * 2)
+      visual = visual + (target - visual) * k
+      if (Math.abs(target - visual) < 0.4) {
+        visual = target
+        settleTargetRef.current = null
+      }
+    }
+    const minVisual = tileValue(COLUMN_LEVELS.length - 1, host)
+    const maxVisual = tileValue(0, host)
+    visual = Math.max(minVisual * 0.7, Math.min(maxVisual * 1.4, visual))
+    visualTileRef.current = visual
+
+    // 2. start a transition when the visual size passes a midpoint
+    if (
+      transitionRef.current == null &&
+      (g.active || settleTargetRef.current != null)
+    ) {
+      const level = levelRef.current
+      const fromTile = tileValue(level, host)
+      const tryTo = (toLevel: number): boolean => {
+        const toTile = tileValue(toLevel, host)
+        const mid = Math.sqrt(fromTile * toTile)
+        const raw =
+          toTile > fromTile
+            ? (visual - mid) / (toTile - mid)
+            : (mid - visual) / (mid - toTile)
+        if (raw < START_MARGIN) return false
+        const width = host.clientWidth || window.innerWidth
+        const fromLayout = layoutForLevel(level, width)
+        const toLayout = layoutForLevel(toLevel, width)
+        const anchorIndex = indexAtY(fromLayout, window.scrollY + g.midY)
+        transitionRef.current = {
+          fromLevel: level,
+          toLevel,
+          fromTile,
+          toTile,
+          midTile: mid,
+          baseAnchorTop: itemTop(fromLayout, anchorIndex),
+          topAnchorTop: itemTop(toLayout, anchorIndex),
+          p: 0,
+          desired: 0,
+        }
+        setTopLevel(toLevel)
+        prefetchZoomLevelRef.current(toLevel)
+        return true
+      }
+      if (level + 1 < COLUMN_LEVELS.length && tryTo(level + 1)) {
+        // started zoom-in transition
+      } else if (level - 1 >= 0 && tryTo(level - 1)) {
+        // started zoom-out transition
+      }
+    }
+
+    // 3. advance the crossfade / apply transforms
+    const t = transitionRef.current
+    const originY = g.midY - rect.top
+    const baseScale = tileValue(levelRef.current, host) > 0
+      ? visual / tileValue(levelRef.current, host)
+      : 1
+
+    let topScale = baseScale
+    let topOffset = 0
+    if (t != null) {
+      topScale = t.toTile > 0 ? visual / t.toTile : 1
+      topOffset =
+        (t.baseAnchorTop - originY) * (visual / t.fromTile) -
+        (t.topAnchorTop - originY) * (visual / t.toTile)
+
+      const raw =
+        t.toTile > t.fromTile
+          ? (visual - t.midTile) / (t.toTile - t.midTile)
+          : (t.midTile - visual) / (t.midTile - t.toTile)
+      const idle = !g.active || now - g.lastMoveTime > IDLE_MS
+      if (idle) {
+        if (raw > 0.02) t.desired = 1
+        else if (raw < -REVERT_MARGIN) t.desired = 0
+      } else {
+        t.desired = Math.max(0, Math.min(1, raw))
+      }
+      const maxStep = prefersReducedMotion() ? 1 : dt / FADE_MS
+      if (t.p < t.desired) t.p = Math.min(t.desired, t.p + maxStep)
+      else if (t.p > t.desired) t.p = Math.max(t.desired, t.p - maxStep)
+
+      const baseEl = baseLayerRef.current
+      const topEl = topLayerRef.current
+      if (baseEl != null) baseEl.style.opacity = `${1 - t.p}`
+      if (topEl != null) topEl.style.opacity = `${t.p}`
+
+      if (t.p >= 1 && t.desired >= 1) commitTransition(t, originY)
+      else if (t.p <= 0 && t.desired <= 0) {
+        transitionRef.current = null
+        setTopLevel(null)
+        if (baseLayerRef.current != null)
+          baseLayerRef.current.style.opacity = ''
+        settleTargetRef.current = tileValue(levelRef.current)
+      }
+    } else {
+      const baseEl = baseLayerRef.current
+      if (baseEl != null) baseEl.style.opacity = ''
+    }
+
+    // apply the exact transforms every frame (GPU only, no React render)
+    const originX = g.midX - rect.left
+    const baseEl = baseLayerRef.current
+    const topEl = topLayerRef.current
+    if (baseEl != null) {
+      baseEl.style.transformOrigin = `${originX}px ${originY}px`
+      baseEl.style.transform = `scale(${baseScale})`
+    }
+    if (topEl != null) {
+      topEl.style.transformOrigin = `${originX}px ${originY}px`
+      topEl.style.transform = `translateY(${topOffset}px) scale(${topScale})`
+    }
+
+    // quantize the values that feed the virtualizers so React re-renders only
+    // occasionally instead of on every frame
+    const next: ViewProps = {
+      baseScale: Math.round(baseScale * 10) / 10,
+      topScale: Math.round(topScale * 10) / 10,
+      originY: Math.round(originY / 16) * 16,
+      topOffset: Math.round(topOffset / 64) * 64,
+    }
+    const prev = viewPropsRef.current
+    if (
+      next.baseScale !== prev.baseScale ||
+      next.topScale !== prev.topScale ||
+      next.originY !== prev.originY ||
+      next.topOffset !== prev.topOffset
+    ) {
+      viewPropsRef.current = next
+      setViewProps(next)
+    }
+
+    const more =
+      g.active ||
+      transitionRef.current != null ||
+      settleTargetRef.current != null
+    if (more) {
+      rafRef.current = window.requestAnimationFrame(() => engineFrame.current())
+    } else {
+      lastFrameRef.current = 0
+    }
+  }
+
+  const ensureEngine = useCallback(() => {
+    if (rafRef.current == 0) {
+      rafRef.current = window.requestAnimationFrame(() => engineFrame.current())
+    }
+  }, [])
+
+  // keep visualTile in sync with the committed level when idle
+  useEffect(() => {
+    if (
+      !gestureRef.current.active &&
+      transitionRef.current == null &&
+      settleTargetRef.current == null
+    ) {
+      const host = hostRef.current
+      if (host != null) visualTileRef.current = tileValue(levelRef.current, host)
+      viewPropsRef.current = {
+        baseScale: 1,
+        topScale: 1,
+        originY: viewPropsRef.current.originY,
+        topOffset: 0,
+      }
+      setViewProps(viewPropsRef.current)
+      if (baseLayerRef.current != null) {
+        baseLayerRef.current.style.transform = 'scale(1)'
+        baseLayerRef.current.style.opacity = ''
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoom.level])
+
+  // ---- gestures ----
+  const pinchRef = useRef(false)
   const wheelAccRef = useRef(0)
   const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null)
   const alternateLevelRef = useRef<number | null>(null)
   const pinchEndAtRef = useRef(0)
 
-  // ---- gestures (native listeners so preventDefault works) ----
   useEffect(() => {
-    const elem = wrapperRef.current
+    const elem = hostRef.current
     if (elem == null) return
 
     const touchDistance = (touches: TouchList) =>
@@ -413,86 +577,62 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         touches[0].clientX - touches[1].clientX,
         touches[0].clientY - touches[1].clientY
       )
-    const touchMidY = (touches: TouchList) =>
-      (touches[0].clientY + touches[1].clientY) / 2
-
-    const levelTile = (level: number) => {
-      const cols = COLUMN_LEVELS[level]
-      return tileSizeForColumns(
-        elem.clientWidth,
-        cols,
-        isDenseLevel(cols) ? 0 : GRID_GAP
-      )
-    }
+    const midPoint = (touches: TouchList) => ({
+      x: (touches[0].clientX + touches[1].clientX) / 2,
+      y: (touches[0].clientY + touches[1].clientY) / 2,
+    })
 
     const onTouchStart = (event: TouchEvent) => {
       if (event.touches.length != 2) return
       event.preventDefault()
-      pinchRef.current = {
-        startDist: touchDistance(event.touches),
-        startLevel: levelRef.current,
+      const rect = elem.getBoundingClientRect()
+      const mid = midPoint(event.touches)
+      const g = gestureRef.current
+      g.active = true
+      g.startDist = touchDistance(event.touches)
+      g.startVisual = visualTileRef.current || tileValue(levelRef.current, elem)
+      g.lastDist = g.startDist
+      g.midX = mid.x
+      g.midY = mid.y
+      g.lastMoveTime = performance.now()
+      // keep the pinch anchored for the virtualizers
+      viewPropsRef.current = {
+        ...viewPropsRef.current,
+        originY: mid.y - rect.top,
       }
+      settleTargetRef.current = null
+      pinchRef.current = true
+      ensureEngine()
     }
 
     const onTouchMove = (event: TouchEvent) => {
-      const pinch = pinchRef.current
-      if (pinch == null || event.touches.length < 2) return
+      const g = gestureRef.current
+      if (!g.active || event.touches.length < 2) return
       event.preventDefault()
-
-      const dist = touchDistance(event.touches)
-      if (dist <= 0 || pinch.startDist <= 0) return
-      const scale = dist / pinch.startDist
-
-      if (morphStateRef.current == null) {
-        // wait until the gesture clearly indicates a direction
-        if (Math.abs(scale - 1) < 0.03) return
-        const direction = scale < 1 ? 1 : -1
-        const toLevel = Math.max(
-          0,
-          Math.min(COLUMN_LEVELS.length - 1, pinch.startLevel + direction)
-        )
-        if (toLevel == pinch.startLevel) return
-        beginMorphRef.current(toLevel, touchMidY(event.touches))
-      }
-
-      const state = morphStateRef.current
-      if (state == null) return
-
-      // Map the finger scale onto the morph progress [0, 1]. The morph is
-      // complete at the geometric midpoint between the two tile sizes (the
-      // point the old level switch used), so one gesture crosses a level
-      // without having to pinch all the way down to the target tile size.
-      const fromTile = levelTile(state.fromLevel)
-      const toTile = levelTile(state.toLevel)
-      const visualTile = fromTile * scale
-      const midTile = Math.sqrt(fromTile * toTile)
-      const p =
-        toTile < fromTile
-          ? (fromTile - visualTile) / (fromTile - midTile)
-          : (visualTile - fromTile) / (midTile - fromTile)
-      const clamped = Math.max(0, Math.min(1, p))
-      state.progress = clamped
-      morphHandleRef.current?.setProgress(clamped)
+      const mid = midPoint(event.touches)
+      g.lastDist = touchDistance(event.touches)
+      g.midX = mid.x
+      g.midY = mid.y
+      g.lastMoveTime = performance.now()
+      ensureEngine()
     }
 
     const onTouchEnd = (event: TouchEvent) => {
-      const wasPinch = pinchRef.current != null
+      const g = gestureRef.current
+      const wasPinch = pinchRef.current
 
       if (wasPinch && event.touches.length < 2) {
-        pinchRef.current = null
+        pinchRef.current = false
+        g.active = false
         pinchEndAtRef.current = Date.now()
-        lastTapRef.current = null // a pinch release must not count as a tap
-        if (morphStateRef.current != null) {
-          // a deliberate pinch in one direction should cross the level, so the
-          // commit threshold is forgiving
-          finishMorphRef.current(
-            morphStateRef.current.progress >= 0.4 ? 1 : 0
-          )
+        lastTapRef.current = null
+        if (transitionRef.current == null) {
+          settleTargetRef.current = tileValue(levelRef.current, elem)
         }
+        ensureEngine()
         return
       }
 
-      // double tap: morph between the current level and the previous one
       if (
         !wasPinch &&
         event.changedTouches.length == 1 &&
@@ -501,7 +641,6 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         const touch = event.changedTouches[0]
         const now = Date.now()
         const prev = lastTapRef.current
-
         if (
           prev != null &&
           now - prev.time < 320 &&
@@ -509,15 +648,20 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         ) {
           event.preventDefault()
           lastTapRef.current = null
-
           const current = levelRef.current
-          const alternate =
-            alternateLevelRef.current ?? (current === 0 ? 2 : 0)
+          const alternate = alternateLevelRef.current ?? (current === 0 ? 2 : 0)
           alternateLevelRef.current = current
-
-          if (alternate != current && morphStateRef.current == null) {
-            beginMorphRef.current(alternate, touch.clientY)
-            window.requestAnimationFrame(() => finishMorphRef.current(1))
+          if (alternate != current && transitionRef.current == null) {
+            const rect = elem.getBoundingClientRect()
+            gestureRef.current.midX = touch.clientX
+            gestureRef.current.midY = touch.clientY
+            viewPropsRef.current = {
+              ...viewPropsRef.current,
+              originY: touch.clientY - rect.top,
+            }
+            settleTargetRef.current = tileValue(alternate, elem)
+            prefetchZoomLevelRef.current(alternate)
+            ensureEngine()
           }
         } else {
           lastTapRef.current = {
@@ -529,11 +673,18 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       }
     }
 
-    // desktop / trackpad pinch (ctrl + wheel): one level per threshold
+    const onTouchCancel = () => {
+      const g = gestureRef.current
+      if (!g.active && transitionRef.current == null) return
+      g.active = false
+      pinchRef.current = false
+      ensureEngine()
+    }
+
     const onWheel = (event: WheelEvent) => {
       if (!event.ctrlKey && !event.metaKey) return
       event.preventDefault()
-      if (morphStateRef.current != null) return
+      if (transitionRef.current != null) return
 
       wheelAccRef.current += -event.deltaY
       const direction =
@@ -542,34 +693,27 @@ const PhotoGrid = <T extends MediaGalleryFields>({
           : wheelAccRef.current < -WHEEL_LEVEL_THRESHOLD
           ? 1
           : 0
-
       if (direction == 0) return
       wheelAccRef.current = 0
 
       const current = levelRef.current
-      const newLevel = Math.max(
+      const target = Math.max(
         0,
         Math.min(COLUMN_LEVELS.length - 1, current + direction)
       )
-      if (newLevel == current) return
-
-      beginMorphRef.current(newLevel, event.clientY)
-      window.requestAnimationFrame(() => finishMorphRef.current(1))
-    }
-
-    // the browser can cancel a touch (e.g. a system gesture); make sure a
-    // morph in flight still resolves instead of freezing mid-way
-    const onTouchCancel = () => {
-      if (pinchRef.current == null && morphStateRef.current == null) return
-      pinchRef.current = null
-      if (morphStateRef.current != null) {
-        finishMorphRef.current(
-          morphStateRef.current.progress >= 0.4 ? 1 : 0
-        )
+      if (target == current) return
+      const rect = elem.getBoundingClientRect()
+      gestureRef.current.midX = event.clientX
+      gestureRef.current.midY = event.clientY
+      viewPropsRef.current = {
+        ...viewPropsRef.current,
+        originY: event.clientY - rect.top,
       }
+      settleTargetRef.current = tileValue(target, elem)
+      prefetchZoomLevelRef.current(target)
+      ensureEngine()
     }
 
-    // Safari fires proprietary gesture events for page pinch zoom
     const onGestureStart = (event: Event) => event.preventDefault()
 
     elem.addEventListener('touchstart', onTouchStart, { passive: false })
@@ -588,12 +732,20 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       elem.removeEventListener('wheel', onWheel)
       elem.removeEventListener('gesturestart', onGestureStart)
       elem.removeEventListener('gesturechange', onGestureStart)
-      if (settleRafRef.current != 0) {
-        window.cancelAnimationFrame(settleRafRef.current)
-        settleRafRef.current = 0
+      if (rafRef.current != 0) {
+        window.cancelAnimationFrame(rafRef.current)
+        rafRef.current = 0
       }
     }
-  }, [])
+  }, [ensureEngine, tileValue])
+
+  // apply a pending scroll once the committed layout is on screen
+  useEffect(() => {
+    if (pendingScrollRef.current != null) {
+      window.scrollTo(0, pendingScrollRef.current)
+      pendingScrollRef.current = null
+    }
+  }, [zoom.level, topLevel])
 
   // ---- floating date bar (dense levels) ----
   const [floatingDate, setFloatingDate] = useState<{
@@ -609,17 +761,14 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       setFloatingDate(null)
       return
     }
-
     let raf = 0
     let hideTimer: number | undefined
-
     const onScroll = () => {
       if (raf != 0) return
       raf = window.requestAnimationFrame(() => {
         raf = 0
         const layout = layoutRef.current
         if (layout == null || layout.itemCount == 0) return
-
         const index = indexAtY(layout, window.scrollY + 8)
         const group = groupForIndex(dateGroupsRef.current, index)
         const title: string | undefined = group?.title
@@ -630,14 +779,12 @@ const PhotoGrid = <T extends MediaGalleryFields>({
               : { title, visible: true }
           )
         }
-
         if (hideTimer != null) window.clearTimeout(hideTimer)
         hideTimer = window.setTimeout(() => {
           setFloatingDate(prev => (prev ? { ...prev, visible: false } : prev))
         }, FLOATING_DATE_HIDE_DELAY)
       })
     }
-
     window.addEventListener('scroll', onScroll, { passive: true })
     return () => {
       window.removeEventListener('scroll', onScroll)
@@ -645,6 +792,8 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       if (hideTimer != null) window.clearTimeout(hideTimer)
     }
   }, [floatingDates])
+
+  const itemKey = useCallback((media: T) => media.id, [])
 
   const renderItem = useCallback(
     (media: T, absoluteIndex: number, tileSize: number) => (
@@ -663,32 +812,44 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     [dense, atlasMap, activeId, onItemActivate, onItemFavorite]
   )
 
+  const prepSections = useCallback(
+    (levelDense: boolean): GridSectionData<T>[] => {
+      if (!levelDense || sections.length == 0) return sections
+      return [{ key: '__dense__', items: flattenSections(sections).items }]
+    },
+    [sections]
+  )
+
+  const topColumns = topLevel != null ? COLUMN_LEVELS[topLevel] : null
+  const topDense = topLevel != null ? isDenseLevel(topColumns!) : false
+
   return (
     <>
       <div
-        ref={wrapperRef}
+        ref={hostRef}
         style={{ touchAction: 'pan-y', position: 'relative' }}
       >
-        {/* The grid stays mounted (just hidden) during a morph: removing the
-            tile the finger is on would make the browser cancel the touch
-            sequence and the morph would freeze. */}
-        <div style={{ opacity: morph != null ? 0 : 1 }}>
+        <div
+          ref={baseLayerRef}
+          style={{ willChange: 'transform, opacity' }}
+        >
           <VirtualGrid
             sections={layoutSections}
             columns={columns}
             gap={dense ? 0 : undefined}
             renderHeaders={renderHeaders}
-            overscanRows={3}
+            overscanRows={4}
             itemKey={itemKey}
             renderItem={renderItem}
             renderSectionTitle={renderSectionTitle}
             onLayoutChange={onLayoutChange}
             onVisibleRange={onVisibleRange}
-            handleRef={gridHandleRef}
+            viewportScale={viewProps.baseScale}
+            viewportOriginY={viewProps.originY}
           />
         </div>
 
-        {morph != null && (
+        {topLevel != null && (
           <div
             style={{
               position: 'absolute',
@@ -698,25 +859,23 @@ const PhotoGrid = <T extends MediaGalleryFields>({
               pointerEvents: 'none',
             }}
           >
-            <MorphLayer
-              sections={sections}
-              flatItems={flatItems}
-              width={wrapperRef.current?.clientWidth || window.innerWidth}
-              fromColumns={COLUMN_LEVELS[morph.fromLevel]}
-              fromDense={isDenseLevel(COLUMN_LEVELS[morph.fromLevel])}
-              toColumns={COLUMN_LEVELS[morph.toLevel]}
-              toDense={isDenseLevel(COLUMN_LEVELS[morph.toLevel])}
-              fromRects={morph.fromRects}
-              fromHeight={morph.fromHeight}
-              anchorId={morph.anchorId}
-              anchorScreenY={morph.anchorScreenY}
-              containerDocTop={morph.containerDocTop}
-              scrollY={morph.scrollY}
-              viewportHeight={window.innerHeight || 800}
-              itemKey={itemKey}
-              renderItem={renderItem}
-              handleRef={morphHandleRef}
-            />
+            <div
+              ref={topLayerRef}
+              style={{ willChange: 'transform, opacity', opacity: 0 }}
+            >
+              <VirtualGrid
+                sections={prepSections(topDense)}
+                columns={topColumns!}
+                gap={topDense ? 0 : undefined}
+                renderHeaders={hasTitles && !topDense}
+                overscanRows={4}
+                itemKey={itemKey}
+                renderItem={renderItem}
+                viewportScale={viewProps.topScale}
+                viewportOriginY={viewProps.originY}
+                viewportOffsetY={viewProps.topOffset}
+              />
+            </div>
           </div>
         )}
       </div>
