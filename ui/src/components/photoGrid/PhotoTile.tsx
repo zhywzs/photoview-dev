@@ -3,6 +3,7 @@ import classNames from 'classnames'
 import { ProtectedImage } from '../photoGallery/ProtectedMedia'
 import { MediaType } from '../../__generated__/globalTypes'
 import { MediaGalleryFields } from '../photoGallery/__generated__/MediaGalleryFields'
+import { AtlasTile } from './atlas'
 import { thumbSourceFor } from './gridLayout'
 
 /** hover actions render only on devices with a real mouse */
@@ -17,6 +18,12 @@ type PhotoTileProps = {
   active?: boolean
   /** let the tile stretch to fill the row width (dense seamless mode) */
   fluidWidth?: boolean
+  /**
+   * Sprite sheet placement of this photo. When present the tile renders
+   * as a background-image slice of the atlas instead of an individual
+   * image request (dense levels load a whole screen in a few requests).
+   */
+  atlas?: AtlasTile
   onClick?(): void
   onFavorite?(): void
 }
@@ -33,6 +40,7 @@ const PhotoTile = ({
   tileSize,
   active,
   fluidWidth,
+  atlas,
   onClick,
   onFavorite,
 }: PhotoTileProps) => {
@@ -61,12 +69,26 @@ const PhotoTile = ({
       role="button"
       aria-label={media.title ?? media.id}
     >
-      <ProtectedImage
-        className="w-full h-full object-cover"
-        src={src}
-        blurhash={showBlurhash ? media.blurhash : null}
-        lazyLoading
-      />
+      {atlas != null ? (
+        /* atlas tile: a slice of the sprite sheet, scaled so one atlas
+           tile exactly fills this tile */
+        <div
+          className="w-full h-full"
+          style={{
+            backgroundImage: `url("${atlas.url}")`,
+            backgroundSize: `${atlas.gridSize * tileSize}px ${atlas.gridSize * tileSize}px`,
+            backgroundPosition: `-${atlas.x * tileSize}px -${atlas.y * tileSize}px`,
+            backgroundRepeat: 'no-repeat',
+          }}
+        />
+      ) : (
+        <ProtectedImage
+          className="w-full h-full object-cover"
+          src={src}
+          blurhash={showBlurhash ? media.blurhash : null}
+          lazyLoading
+        />
+      )}
 
       {isVideo && (
         <div

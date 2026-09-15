@@ -1,0 +1,36 @@
+type MediaAtlasEntry {
+  mediaId: ID!
+  "x position of the tile inside the atlas grid"
+  x: Int!
+  "y position of the tile inside the atlas grid"
+  y: Int!
+}
+
+type MediaAtlas {
+  "URL of the sprite sheet image"
+  url: String!
+  "size of a single tile inside the atlas in px"
+  tileSize: Int!
+  "number of tiles per atlas row/column"
+  gridSize: Int!
+  entries: [MediaAtlasEntry!]!
+}
+
+extend type Query {
+  """
+  Sprite sheets ("atlases") containing the given media, owned by the
+  logged in user. Dense gallery views load these instead of individual
+  thumbnails, reducing a full screen of photos to a handful of requests.
+  Media that is not part of any atlas (videos, newly added photos) is
+  simply absent from the result and falls back to individual loading.
+  """
+  mediaAtlases(ids: [ID!]!): [MediaAtlas!]! @isAuthorized
+}
+
+extend type Mutation {
+  """
+  Rebuild all thumbnail atlases (sprite sheets) from the existing
+  thumbnail cache. Runs synchronously; useful after bulk library changes.
+  """
+  regenerateThumbnailAtlases: Boolean! @isAdmin
+}

@@ -33,6 +33,24 @@ type GeoBoundingBox struct {
 	MaxLongitude float64 `json:"maxLongitude"`
 }
 
+type MediaAtlas struct {
+	// URL of the sprite sheet image
+	URL string `json:"url"`
+	// size of a single tile inside the atlas in px
+	TileSize int `json:"tileSize"`
+	// number of tiles per atlas row/column
+	GridSize int                `json:"gridSize"`
+	Entries  []*MediaAtlasEntry `json:"entries"`
+}
+
+type MediaAtlasEntry struct {
+	MediaID int `json:"mediaId"`
+	// x position of the tile inside the atlas grid
+	X int `json:"x"`
+	// y position of the tile inside the atlas grid
+	Y int `json:"y"`
+}
+
 type MediaDownload struct {
 	// A description of the role of the media file
 	Title    string    `json:"title"`

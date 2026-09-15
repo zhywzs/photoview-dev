@@ -6,6 +6,7 @@ import React, {
   useRef,
   useState,
 } from 'react'
+import { useQuery } from '@apollo/client'
 import VirtualGrid from './VirtualGrid'
 import PhotoTile from './PhotoTile'
 import { COLUMN_LEVELS, useZoomLevels } from './useZoomLevels'
@@ -33,6 +34,12 @@ import {
   settleZoomTransform,
 } from './gridTransform'
 import { MediaGalleryFields } from '../photoGallery/__generated__/MediaGalleryFields'
+import {
+  MEDIA_ATLASES_QUERY,
+  buildAtlasMap,
+  mediaAtlases,
+  mediaAtlasesVariables,
+} from './atlas'
 
 /** accumulated wheel delta that advances one zoom level */
 const WHEEL_LEVEL_THRESHOLD = 60
@@ -176,6 +183,46 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   const levelRef = useRef(zoom.level)
   levelRef.current = zoom.level
 
+  // ---- thumbnail atlas (dense levels) ----
+  // The atlas query needs the tile size (computed by the layout), tracked
+  // as state so the grid re-renders when it first becomes available.
+  const [tileSize, setTileSize] = useState(0)
+
+  const onLayoutChange = useCallback((layout: GridLayout) => {
+    layoutRef.current = layout
+    setTileSize(layout.tileSize)
+  }, [])
+
+  const dpr =
+    typeof window === 'undefined'
+      ? 1
+      : Math.min(window.devicePixelRatio || 1, 3)
+  // atlases hold 128px tiles; use them whenever the dense level's tiles
+  // need no more than that (30 columns everywhere, 15 columns on most
+  // devices - desktop HiDPI falls back to individual thumbnails)
+  const atlasEnabled = dense && tileSize > 0 && tileSize * dpr <= 128
+
+  const atlasIds = useMemo(
+    () =>
+      atlasEnabled
+        ? layoutSections.flatMap(section =>
+            section.items.map(item => item.id)
+          )
+        : [],
+    [atlasEnabled, layoutSections]
+  )
+
+  const { data: atlasData } = useQuery<
+    mediaAtlases,
+    mediaAtlasesVariables
+  >(MEDIA_ATLASES_QUERY, {
+    variables: { ids: atlasIds },
+    skip: !atlasEnabled || atlasIds.length == 0,
+    fetchPolicy: 'no-cache',
+  })
+
+  const atlasMap = useMemo(() => buildAtlasMap(atlasData), [atlasData])
+
   // extra overscan while a pinch has committed: the residual transform
   // scales the rendered rows, and the virtualizer needs to cover the
   // scaled-up viewport area
@@ -189,10 +236,6 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null)
   const alternateLevelRef = useRef<number | null>(null)
   const pinchEndAtRef = useRef(0)
-
-  const onLayoutChange = useCallback((layout: GridLayout) => {
-    layoutRef.current = layout
-  }, [])
 
   /**
    * Commit to a new zoom level. Captures a scroll anchor at the gesture
@@ -618,6 +661,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         media={media}
         tileSize={tileSize}
         fluidWidth={dense}
+        atlas={atlasMap.get(media.id)}
         active={activeId != null && media.id == activeId}
         onClick={() => onItemActivate(media, absoluteIndex)}
         onFavorite={
@@ -625,7 +669,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         }
       />
     ),
-    [dense, activeId, onItemActivate, onItemFavorite]
+    [dense, atlasMap, activeId, onItemActivate, onItemFavorite]
   )
 
   return (

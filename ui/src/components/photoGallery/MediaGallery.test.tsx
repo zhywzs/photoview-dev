@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import { MockedProvider } from '@apollo/client/testing'
 
 import React from 'react'
 import { MediaType } from '../../__generated__/globalTypes'
@@ -19,8 +20,8 @@ test('photo gallery with media', () => {
         id: '165',
         title: 'test media',
         type: MediaType.Photo,
-      thumbnailSmall: null,
-      thumbnailTiny: null,
+        thumbnailSmall: null,
+        thumbnailTiny: null,
         thumbnail: {
           url: '/photo/thumbnail_3666760020_jpg_x76GG5pS.jpg',
           width: 768,
@@ -37,8 +38,8 @@ test('photo gallery with media', () => {
         id: '122',
         title: 'test media',
         type: MediaType.Photo,
-      thumbnailSmall: null,
-      thumbnailTiny: null,
+        thumbnailSmall: null,
+        thumbnailTiny: null,
         thumbnail: null,
         highRes: null,
         videoWeb: null,
@@ -50,8 +51,8 @@ test('photo gallery with media', () => {
         id: '98',
         title: 'test media',
         type: MediaType.Video,
-      thumbnailSmall: null,
-      thumbnailTiny: null,
+        thumbnailSmall: null,
+        thumbnailTiny: null,
         thumbnail: null,
         highRes: null,
         videoWeb: null,
@@ -64,11 +65,13 @@ test('photo gallery with media', () => {
   }
 
   render(
-    <MediaGallery
-      dispatchMedia={dispatchMedia}
-      mediaState={mediaState}
-      loading={false}
-    />
+    <MockedProvider mocks={[]}>
+      <MediaGallery
+        dispatchMedia={dispatchMedia}
+        mediaState={mediaState}
+        loading={false}
+      />
+    </MockedProvider>
   )
 
   expect(
@@ -87,11 +90,13 @@ describe('photo gallery presenting', () => {
     }
 
     render(
-      <MediaGallery
-        dispatchMedia={dispatchMedia}
-        loading={false}
-        mediaState={mediaStateNoPresent}
-      />
+      <MockedProvider mocks={[]}>
+        <MediaGallery
+          dispatchMedia={dispatchMedia}
+          loading={false}
+          mediaState={mediaStateNoPresent}
+        />
+      </MockedProvider>
     )
 
     expect(screen.queryByTestId('present-overlay')).not.toBeInTheDocument()
@@ -105,8 +110,8 @@ describe('photo gallery presenting', () => {
           id: '165',
           title: 'test media',
           type: MediaType.Photo,
-      thumbnailSmall: null,
-      thumbnailTiny: null,
+          thumbnailSmall: null,
+          thumbnailTiny: null,
           thumbnail: {
             url: '/photo/thumbnail_3666760020_jpg_x76GG5pS.jpg',
             width: 768,
@@ -124,11 +129,13 @@ describe('photo gallery presenting', () => {
     }
 
     render(
-      <MediaGallery
-        dispatchMedia={dispatchMedia}
-        loading={false}
-        mediaState={mediaStatePresent}
-      />
+      <MockedProvider mocks={[]}>
+        <MediaGallery
+          dispatchMedia={dispatchMedia}
+          loading={false}
+          mediaState={mediaStatePresent}
+        />
+      </MockedProvider>
     )
 
     expect(screen.getByTestId('present-overlay')).toBeInTheDocument()

@@ -168,6 +168,10 @@ var database_models []interface{} = []interface{}{
 	// Face detection
 	&models.FaceGroup{},
 	&models.ImageFace{},
+
+	// Thumbnail atlases (sprite sheets for dense gallery views)
+	&models.ThumbnailAtlas{},
+	&models.ThumbnailAtlasEntry{},
 }
 
 func MigrateDatabase(db *gorm.DB) error {

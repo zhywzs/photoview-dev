@@ -10,6 +10,7 @@ import (
 	"github.com/photoview/photoview/api/graphql/models"
 	"github.com/photoview/photoview/api/graphql/notification"
 	"github.com/photoview/photoview/api/scanner"
+	"github.com/photoview/photoview/api/scanner/atlas"
 	"github.com/photoview/photoview/api/scanner/scanner_cache"
 	"github.com/photoview/photoview/api/scanner/scanner_task"
 	"github.com/photoview/photoview/api/scanner/scanner_utils"
@@ -179,6 +180,10 @@ func (queue *ScannerQueue) processQueue(notifyThrottle *utils.Throttle) {
 			Content:  "All jobs have been scanned",
 			Positive: true,
 		})
+
+		// rebuild the thumbnail atlases in the background so dense
+		// gallery views pick up the new photos
+		atlas.RegenerateAllAtlasesAsync(queue.db)
 	} else {
 		notifyThrottle.Trigger(func() {
 			notification.BroadcastNotification(&models.Notification{
