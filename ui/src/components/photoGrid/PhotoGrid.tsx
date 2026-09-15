@@ -35,6 +35,7 @@ import {
 } from './gridTransform'
 import { MediaGalleryFields } from '../photoGallery/__generated__/MediaGalleryFields'
 import {
+  AtlasTileMap,
   MEDIA_ATLASES_QUERY,
   buildAtlasMap,
   mediaAtlases,
@@ -213,7 +214,25 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     fetchPolicy: 'no-cache',
   })
 
-  const atlasMap = useMemo(() => buildAtlasMap(atlasData), [atlasData])
+  // The atlas query is keyed on the full id list, so it re-runs whenever
+  // the list changes (e.g. after deleting a photo) and its data is briefly
+  // undefined. Accumulate the resolved tiles instead of replacing them, so
+  // the whole wall does not blank out during that gap; only tiles for media
+  // that is really gone are pruned.
+  const atlasMapRef = useRef<AtlasTileMap>(new Map())
+  const atlasMap = useMemo(() => {
+    const incoming = buildAtlasMap(atlasData)
+    for (const [mediaId, tile] of incoming) {
+      atlasMapRef.current.set(mediaId, tile)
+    }
+    if (atlasIds.length > 0) {
+      const live = new Set(atlasIds)
+      for (const mediaId of Array.from(atlasMapRef.current.keys())) {
+        if (!live.has(mediaId)) atlasMapRef.current.delete(mediaId)
+      }
+    }
+    return new Map(atlasMapRef.current)
+  }, [atlasData, atlasIds])
 
   // extra overscan while a pinch has committed: the residual transform
   // scales the rendered rows, and the virtualizer needs to cover the
@@ -647,6 +666,8 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     }
   }, [floatingDates])
 
+  const itemKey = useCallback((media: T) => media.id, [])
+
   const renderItem = useCallback(
     (media: T, absoluteIndex: number, tileSize: number) => (
       <PhotoTile
@@ -675,6 +696,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
           gap={dense ? 0 : undefined}
           renderHeaders={renderHeaders}
           overscanRows={extraOverscan ? 8 : 3}
+          itemKey={itemKey}
           renderItem={renderItem}
           renderSectionTitle={renderSectionTitle}
           onLayoutChange={onLayoutChange}

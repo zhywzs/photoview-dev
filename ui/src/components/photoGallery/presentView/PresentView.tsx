@@ -15,6 +15,7 @@ import {
   GalleryAction,
 } from '../mediaGalleryReducer'
 import { MediaGalleryFields } from '../__generated__/MediaGalleryFields'
+import { removeMediaFromCache } from '../../photoGrid/cacheUpdate'
 
 const DELETE_MEDIA_MUTATION = gql`
   mutation deleteMediaMutation($mediaId: ID!) {
@@ -226,12 +227,11 @@ const PresentView = ({
       deleteMedia({ variables: { mediaId: activeMedia.id } })
         .then(() => {
           setDeleting(false)
-          // evict from cache so grid queries re-render without it
-          apolloClient.cache.evict({ id: `Media:${activeMedia.id}` })
-          apolloClient.cache.gc()
+          // drop it from every cached list without a cache-wide refetch
+          removeMediaFromCache(apolloClient, activeMedia.id)
           // navigate to next image, or close if this was the last one
-          const isLast = hasList && activeIndex === mediaList!.length - 1
-          if (isLast || (hasList && mediaList!.length <= 1)) {
+          const isLast = hasList && activeIndex === mediaList.length - 1
+          if (isLast || (hasList && mediaList.length <= 1)) {
             closeViewer()
           } else {
             dispatchMedia({ type: 'nextImage' })

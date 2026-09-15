@@ -7,6 +7,7 @@ import { MediaType } from '../../__generated__/globalTypes'
 import { MediaGalleryFields } from '../photoGallery/__generated__/MediaGalleryFields'
 import { AtlasTile } from './atlas'
 import { thumbSourceFor } from './gridLayout'
+import { removeMediaFromCache } from './cacheUpdate'
 
 const DELETE_MEDIA_MUTATION = gql`
   mutation deleteMediaFromTile($mediaId: ID!) {
@@ -112,10 +113,9 @@ const PhotoTile = ({
     window.setTimeout(() => {
       deleteMedia({ variables: { mediaId: media.id } })
         .then(() => {
-          // evict the media from the Apollo cache so all queries
-          // (timeline, albums, search) re-render without it
-          apolloClient.cache.evict({ id: `Media:${media.id}` })
-          apolloClient.cache.gc()
+          // drop the media from every cached list without triggering a
+          // cache-wide refetch (which would blank the whole grid)
+          removeMediaFromCache(apolloClient, media.id)
         })
         .catch(() => {
           setDeleting(false)

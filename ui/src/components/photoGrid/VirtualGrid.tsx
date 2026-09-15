@@ -14,6 +14,13 @@ import {
   GRID_GAP,
   SECTION_HEADER_HEIGHT,
 } from './gridLayout'
+import { prefersReducedMotion } from './gridTransform'
+
+/** duration of the gap-closing slide when tiles reflow (e.g. after a delete) */
+const FLIP_DURATION_MS = 240
+const FLIP_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)'
+/** sub-pixel moves below this are ignored (avoids pointless animations) */
+const FLIP_MIN_PX = 0.5
 
 type VirtualGridProps<T> = {
   sections: GridSectionData<T>[]
@@ -28,6 +35,8 @@ type VirtualGridProps<T> = {
   renderHeaders?: boolean
   /** extra rows rendered above/below the viewport */
   overscanRows?: number
+  /** stable identity of an item, so DOM nodes survive list reorders */
+  itemKey(item: T): string
   renderItem: (
     item: T,
     absoluteIndex: number,
@@ -43,13 +52,36 @@ type ViewportState = {
   bottom: number
 }
 
+/** One rendered tile: its identity and its position inside its section. */
+type GridEntry<T> = {
+  id: string
+  item: T
+  absoluteIndex: number
+  /** top offset inside the owning section (already below its header) */
+  top: number
+  /** left offset inside the section */
+  left: number
+}
+
+type Move = {
+  el: HTMLElement
+  dx: number
+  dy: number
+}
+
 /**
  * Window-scroll based virtualized grid.
  *
  * Renders only the rows of the sections that intersect the viewport, so the
  * DOM stays small (~columns x visible rows) even with thousands of items.
- * All sections are absolutely positioned inside a container with the full
- * computed height, so the window scrollbar reflects the whole list.
+ *
+ * Every tile is a keyed, absolutely positioned box. Keying by media id (and
+ * not by position) means a list change - most importantly deleting a photo -
+ * reuses the existing DOM nodes: photos slide to fill the gap and their
+ * already loaded images stay put instead of flashing. The slide is a FLIP
+ * animation (measure the old position from the previous layout, transform
+ * from there to zero) that is only armed when the geometry (tile size,
+ * columns, width) is unchanged, so zooming and resizing do not fight it.
  */
 const VirtualGrid = <T,>({
   sections,
@@ -57,6 +89,7 @@ const VirtualGrid = <T,>({
   gap = GRID_GAP,
   renderHeaders = true,
   overscanRows = 3,
+  itemKey,
   renderItem,
   renderSectionTitle,
   onLayoutChange,
@@ -123,12 +156,22 @@ const VirtualGrid = <T,>({
     [sections, width, columns, gap, renderHeaders]
   )
 
-  const layoutRef = useRef(layout)
-  layoutRef.current = layout
-
   useLayoutEffect(() => {
     onLayoutChange?.(layout)
   }, [layout, onLayoutChange])
+
+  // The vertical layout uses the integer tile size (so section heights and
+  // scroll anchoring stay exact); horizontally we fill the container to the
+  // pixel with the un-rounded tile width/fractional pitch.
+  const renderWidth =
+    width || (typeof window !== 'undefined' ? window.innerWidth : 0)
+  const horizontalPitch =
+    layout.columns > 0 ? (renderWidth + gap) / layout.columns : 0
+  const tileWidth =
+    layout.columns > 0
+      ? renderWidth / layout.columns -
+        (gap * (layout.columns - 1)) / layout.columns
+      : layout.tileSize
 
   const visibleSections = useMemo(() => {
     return layout.sections
@@ -152,71 +195,146 @@ const VirtualGrid = <T,>({
           (lastRow + 1) * section.cols
         )
 
-        return {
-          section,
-          firstRow,
-          items: sectionData.items.slice(start, end),
-          startIndex: start,
+        const topBase = section.hasHeader ? layout.headerHeight : 0
+        const rowPitch = layout.tileSize + gap
+        const entries: GridEntry<T>[] = []
+        for (let i = start; i < end; i++) {
+          const item = sectionData.items[i]
+          if (item == null) continue
+          entries.push({
+            id: itemKey(item),
+            item,
+            absoluteIndex: section.firstIndex + i,
+            top: topBase + Math.floor(i / section.cols) * rowPitch,
+            left: (i % section.cols) * horizontalPitch,
+          })
         }
+
+        return { section, entries }
       })
       .filter((x): x is NonNullable<typeof x> => x != null)
-  }, [layout, sections, viewport])
+  }, [
+    layout,
+    sections,
+    viewport,
+    overscanRows,
+    gap,
+    horizontalPitch,
+    itemKey,
+  ])
 
-  const renderRow = useCallback(
-    (sectionIndex: number) => {
-      const { section, firstRow, items, startIndex } =
-        visibleSections[sectionIndex]
-      const tileSize = layout.tileSize
-
-      const rows: React.ReactNode[] = []
-      for (let row = 0; row < Math.ceil(items.length / section.cols); row++) {
-        const rowTop =
-          (section.hasHeader ? layout.headerHeight : 0) +
-          (firstRow + row) * (tileSize + gap)
-
-        const rowItems: React.ReactNode[] = []
-        for (let col = 0; col < section.cols; col++) {
-          const i = row * section.cols + col
-          if (i >= items.length) break
-          rowItems.push(
-            <React.Fragment key={col}>
-              {renderItem(
-                items[i],
-                section.firstIndex + startIndex + i,
-                tileSize
-              )}
-            </React.Fragment>
-          )
-        }
-
-        rows.push(
-          <div
-            key={firstRow + row}
-            style={{
-              position: 'absolute',
-              top: rowTop,
-              left: 0,
-              right: 0,
-              display: 'flex',
-              gap,
-              height: tileSize,
-            }}
-          >
-            {rowItems}
-          </div>
-        )
-      }
-      return rows
-    },
-    [visibleSections, layout, gap, renderItem]
+  // ---- FLIP bookkeeping ----
+  const sectionRefs = useRef(new Map<string, HTMLDivElement>())
+  const tileRefs = useRef(new Map<string, HTMLDivElement>())
+  const prevTilePos = useRef(
+    new Map<string, { top: number; left: number; sectionKey: string }>()
   )
+  const prevSectionOffsets = useRef(new Map<string, number>())
+  const prevSig = useRef<string | null>(null)
+
+  const registerSection = useCallback((el: HTMLDivElement | null) => {
+    if (el == null) return
+    const key = el.dataset.sectionKey
+    if (key != null) sectionRefs.current.set(key, el)
+  }, [])
+
+  const registerTile = useCallback((el: HTMLDivElement | null) => {
+    if (el == null) return
+    const id = el.dataset.tileId
+    if (id != null) tileRefs.current.set(id, el)
+  }, [])
+
+  useLayoutEffect(() => {
+    const sig = [
+      layout.columns,
+      layout.tileSize,
+      layout.headerHeight,
+      gap,
+      renderHeaders ? 1 : 0,
+      Math.round(renderWidth),
+    ].join('|')
+
+    // Only animate when the geometry is stable: a column change (zoom) or a
+    // resize relayouts everything and is handled elsewhere (the zoom host
+    // transform), so FLIP would fight it.
+    const canAnimate = prevSig.current === sig && !prefersReducedMotion()
+
+    const nextTilePos = new Map<
+      string,
+      { top: number; left: number; sectionKey: string }
+    >()
+    const nextSectionOffsets = new Map<string, number>()
+    const moves: Move[] = []
+
+    for (const { section, entries } of visibleSections) {
+      nextSectionOffsets.set(section.key, section.offset)
+
+      if (canAnimate) {
+        const sectionEl = sectionRefs.current.get(section.key)
+        const prevOffset = prevSectionOffsets.current.get(section.key)
+        if (sectionEl != null && prevOffset != null) {
+          const dy = prevOffset - section.offset
+          if (Math.abs(dy) >= FLIP_MIN_PX) moves.push({ el: sectionEl, dx: 0, dy })
+        }
+      }
+
+      for (const entry of entries) {
+        nextTilePos.set(entry.id, {
+          top: entry.top,
+          left: entry.left,
+          sectionKey: section.key,
+        })
+
+        if (!canAnimate) continue
+        const tileEl = tileRefs.current.get(entry.id)
+        const prev = prevTilePos.current.get(entry.id)
+        if (tileEl == null || prev == null || prev.sectionKey !== section.key)
+          continue
+
+        const dx = prev.left - entry.left
+        const dy = prev.top - entry.top
+        if (Math.abs(dx) >= FLIP_MIN_PX || Math.abs(dy) >= FLIP_MIN_PX) {
+          moves.push({ el: tileEl, dx, dy })
+        }
+      }
+    }
+
+    if (moves.length > 0) {
+      // First pin every moving element at its old position ...
+      for (const { el, dx, dy } of moves) {
+        el.style.transition = 'none'
+        el.style.transform = `translate(${dx}px, ${dy}px)`
+      }
+      // ... force a single reflow so the browser acknowledges the start ...
+      void containerRef.current?.offsetHeight
+      // ... then release to zero and let the transition glide them over.
+      for (const { el } of moves) {
+        el.style.transition = `transform ${FLIP_DURATION_MS}ms ${FLIP_EASING}`
+        el.style.transform = ''
+      }
+    }
+
+    // prune refs for nodes that are gone, then remember this layout
+    for (const id of Array.from(tileRefs.current.keys())) {
+      if (!nextTilePos.has(id)) tileRefs.current.delete(id)
+    }
+    for (const key of Array.from(sectionRefs.current.keys())) {
+      if (!nextSectionOffsets.has(key)) sectionRefs.current.delete(key)
+    }
+
+    prevTilePos.current = nextTilePos
+    prevSectionOffsets.current = nextSectionOffsets
+    prevSig.current = sig
+  }, [visibleSections, layout, gap, renderHeaders, renderWidth])
 
   return (
     <div ref={containerRef} style={{ position: 'relative', width: '100%' }}>
       <div style={{ height: layout.totalHeight, position: 'relative' }}>
-        {visibleSections.map(({ section }, i) => (
+        {visibleSections.map(({ section, entries }) => (
           <div
             key={section.key}
+            ref={registerSection}
+            data-section-key={section.key}
             style={{
               position: 'absolute',
               top: section.offset,
@@ -240,7 +358,22 @@ const VirtualGrid = <T,>({
                   : defaultSectionTitle(section.title!)}
               </div>
             )}
-            {renderRow(i)}
+            {entries.map(entry => (
+              <div
+                key={entry.id}
+                ref={registerTile}
+                data-tile-id={entry.id}
+                style={{
+                  position: 'absolute',
+                  top: entry.top,
+                  left: entry.left,
+                  width: tileWidth,
+                  height: tileWidth,
+                }}
+              >
+                {renderItem(entry.item, entry.absoluteIndex, tileWidth)}
+              </div>
+            ))}
           </div>
         ))}
       </div>
