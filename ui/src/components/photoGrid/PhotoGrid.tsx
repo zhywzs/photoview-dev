@@ -448,14 +448,11 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       }
     }
 
-    // 3. advance the crossfade / apply transforms
+    // 3. advance the crossfade
     const t = transitionRef.current
     const originY = g.midY - rect.top
-    const baseScale = tileValue(levelRef.current, host) > 0
-      ? visual / tileValue(levelRef.current, host)
-      : 1
 
-    let topScale = baseScale
+    let topScale: number | null = null
     let topOffset = 0
     if (t != null) {
       topScale = t.toTile > 0 ? visual / t.toTile : 1
@@ -478,10 +475,10 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       if (t.p < t.desired) t.p = Math.min(t.desired, t.p + maxStep)
       else if (t.p > t.desired) t.p = Math.max(t.desired, t.p - maxStep)
 
-      const baseEl = baseLayerRef.current
-      const topEl = topLayerRef.current
-      if (baseEl != null) baseEl.style.opacity = `${1 - t.p}`
-      if (topEl != null) topEl.style.opacity = `${t.p}`
+      const baseOpacityEl = baseLayerRef.current
+      const topOpacityEl = topLayerRef.current
+      if (baseOpacityEl != null) baseOpacityEl.style.opacity = `${1 - t.p}`
+      if (topOpacityEl != null) topOpacityEl.style.opacity = `${t.p}`
 
       if (t.p >= 1 && t.desired >= 1) commitTransition(t, originY)
       else if (t.p <= 0 && t.desired <= 0) {
@@ -496,6 +493,15 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       if (baseEl != null) baseEl.style.opacity = ''
     }
 
+    // The committed level may have just changed inside commitTransition above.
+    // Derive the base scale from the *current* level, otherwise the commit
+    // frame would render the new layout at the previous level's scale (the
+    // full white flash / shift on switch).
+    const baseTile = tileValue(levelRef.current, host)
+    const baseScale = baseTile > 0 ? visual / baseTile : 1
+    const finalTopScale = topScale ?? baseScale
+    const finalTopOffset = topScale == null ? 0 : topOffset
+
     // apply the exact transforms every frame (GPU only, no React render)
     const originX = g.midX - rect.left
     const baseEl = baseLayerRef.current
@@ -506,16 +512,16 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     }
     if (topEl != null) {
       topEl.style.transformOrigin = `${originX}px ${originY}px`
-      topEl.style.transform = `translateY(${topOffset}px) scale(${topScale})`
+      topEl.style.transform = `translateY(${finalTopOffset}px) scale(${finalTopScale})`
     }
 
     // quantize the values that feed the virtualizers so React re-renders only
     // occasionally instead of on every frame
     const next: ViewProps = {
       baseScale: Math.round(baseScale * 10) / 10,
-      topScale: Math.round(topScale * 10) / 10,
+      topScale: Math.round(finalTopScale * 10) / 10,
       originY: Math.round(originY / 16) * 16,
-      topOffset: Math.round(topOffset / 64) * 64,
+      topOffset: Math.round(finalTopOffset / 64) * 64,
     }
     const prev = viewPropsRef.current
     if (
