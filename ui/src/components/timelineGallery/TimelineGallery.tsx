@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useReducer } from 'react'
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useState,
+} from 'react'
 import { useQuery, gql } from '@apollo/client'
 import PhotoGrid from '../photoGrid/PhotoGrid'
 import PresentView from '../photoGallery/presentView/PresentView'
@@ -30,7 +36,7 @@ import {
   groupTimeline,
   targetRowsForColumns,
 } from '../photoGrid/timelineGrouping'
-import { COLUMN_LEVELS, useZoomLevels } from '../photoGrid/useZoomLevels'
+import { readStoredColumns } from '../photoGrid/gridZoom'
 
 export const MY_TIMELINE_QUERY = gql`
   query myTimeline(
@@ -163,7 +169,7 @@ function formatGroupTitle(
 const TimelineGallery = ({ forceFavorites = false }: TimelineGalleryProps) => {
   const { t, i18n } = useTranslation()
 
-  const { getParam, setParams } = useURLParameters()
+  const { getParam } = useURLParameters()
 
   const onlyFavorites =
     forceFavorites || getParam('favorites') == '1' ? true : false
@@ -173,14 +179,6 @@ const TimelineGallery = ({ forceFavorites = false }: TimelineGalleryProps) => {
 
   const fromDate = filterDateFrom != null ? `${filterDateFrom}T00:00:00Z` : undefined
   const toDate = filterDateTo ? `${filterDateTo}T23:59:59Z` : undefined
-
-  // Clicking a date label filters the timeline to that period
-  const filterPeriod = (start: string | null, end: string | null) => {
-    setParams([
-      { key: 'dateFrom', value: start },
-      { key: 'dateTo', value: end },
-    ])
-  }
 
   const { data, error, loading, refetch, fetchMore } = useQuery<
     myTimeline,
@@ -254,81 +252,22 @@ const TimelineGallery = ({ forceFavorites = false }: TimelineGalleryProps) => {
     [markFavorite]
   )
 
-  // the zoom state is shared with the grid so the date grouping
-  // granularity can follow the zoom level
-  const zoom = useZoomLevels()
-  const columns = COLUMN_LEVELS[zoom.level]
+  // The grid owns the continuous zoom and reports the settled column count
+  // so the date grouping granularity can follow it.
+  const [columns, setColumns] = useState(() => readStoredColumns())
 
-  // group the timeline into adaptive date sections for the virtualized grid
-  const { sections, sectionRanges } = useMemo(() => {
+  const sections = useMemo(() => {
     const timeline = data?.myTimeline || []
-
     const granularity = granularityForColumns(columns)
     const targetRows = targetRowsForColumns(columns)
     const groups = groupTimeline(timeline, granularity, columns, targetRows)
-
-    // dense levels show the title in a narrow floating pill
     const compact = columns > 5
-
-    const builtSections: GridSectionData<myTimeline_myTimeline>[] = []
-    const ranges = new Map<string, { start: string; end: string; count: number }>()
-
-    for (const group of groups) {
-      builtSections.push({
-        key: group.key,
-        title: formatGroupTitle(group, compact, i18n.language),
-        items: group.items,
-      })
-      ranges.set(group.key, {
-        start: group.start,
-        end: group.end,
-        count: group.items.length,
-      })
-    }
-
-    return { sections: builtSections, sectionRanges: ranges }
+    return groups.map(group => ({
+      key: group.key,
+      title: formatGroupTitle(group, compact, i18n.language),
+      items: group.items,
+    })) as GridSectionData<myTimeline_myTimeline>[]
   }, [data, columns, i18n.language])
-
-  const renderSectionTitle = useCallback(
-    (title: string, sectionKey: string) => {
-      const range = sectionRanges.get(sectionKey)
-      const isFiltered =
-        range != null &&
-        filterDateFrom == range.start &&
-        filterDateTo == range.end
-
-      const filterLabel = isFiltered
-        ? t('timeline.period_filter.clear', 'Clear date filter')
-        : t('timeline.period_filter.filter', 'Filter by this period')
-
-      return (
-        <div className="h-full flex items-center gap-2 px-1">
-          <button
-            className={`text-sm font-semibold text-gray-700 dark:text-gray-200 rounded px-1.5 py-0.5 -ml-1.5 hover:bg-gray-100 dark:hover:bg-[#2c333a] focus:outline-none focus:ring-2 focus:ring-blue-400 ${
-              isFiltered ? 'underline' : ''
-            }`}
-            aria-label={`${title}, ${filterLabel}`}
-            title={filterLabel}
-            onClick={() => {
-              if (range == null) return
-              filterPeriod(isFiltered ? null : range.start, isFiltered ? null : range.end)
-            }}
-          >
-            {title}
-          </button>
-          <span className="text-xs text-gray-400 dark:text-gray-500 tabular-nums">
-            {range != null &&
-              t('timeline.period_filter.photo_count', {
-                defaultValue: '{{count}} photos',
-                count: range.count,
-              })}
-          </span>
-        </div>
-      )
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sectionRanges, filterDateFrom, filterDateTo, t]
-  )
 
   if (error) {
     return <div>{error.message}</div>
@@ -343,12 +282,10 @@ const TimelineGallery = ({ forceFavorites = false }: TimelineGalleryProps) => {
     <div className="-mx-3 lg:mx-0 overflow-x-hidden">
       <PhotoGrid
         sections={sections}
-        renderSectionTitle={renderSectionTitle}
         onItemActivate={onItemActivate}
         onItemFavorite={onItemFavorite}
         activeId={activeMedia?.id}
-        zoomLevel={zoom.level}
-        onZoomLevelChange={level => zoom.setLevel(level)}
+        onColumnsChange={setColumns}
       />
       <div ref={containerElem}>
         <PaginateLoader
