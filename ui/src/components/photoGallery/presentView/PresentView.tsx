@@ -43,6 +43,8 @@ const PAGE_ANIMATION_MS = 240
 const CLOSE_ANIMATION_MS = 260
 const SPRING_BACK_MS = 200
 const CONTROLS_AUTOHIDE_MS = 2500
+/** duration of the delete fall animation */
+const DELETE_ANIMATION_MS = 400
 /**
  * Neighbor previews (thumbnail only) mount this long after the viewer
  * opens so the current photo's high-res load is not contested.
@@ -116,6 +118,7 @@ const PresentView = ({
   // ---- delete (trash) ----
   const { t } = useTranslation()
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [deleteMedia, { loading: deleteLoading }] = useMutation<{
     deleteMedia: boolean
   }>(DELETE_MEDIA_MUTATION)
@@ -215,19 +218,26 @@ const PresentView = ({
 
   const confirmDelete = useCallback(() => {
     setShowDeleteConfirm(false)
-    deleteMedia({ variables: { mediaId: activeMedia.id } })
-      .then(() => {
-        // navigate to next image, or close if this was the last one
-        const isLast = hasList && activeIndex === mediaList!.length - 1
-        if (isLast || (hasList && mediaList!.length <= 1)) {
-          closeViewer()
-        } else {
-          dispatchMedia({ type: 'nextImage' })
-        }
-      })
-      .catch(() => {
-        // stay on the image
-      })
+
+    // play the fall animation first, then delete and navigate
+    setDeleting(true)
+    window.setTimeout(() => {
+      deleteMedia({ variables: { mediaId: activeMedia.id } })
+        .then(() => {
+          setDeleting(false)
+          // navigate to next image, or close if this was the last one
+          const isLast = hasList && activeIndex === mediaList!.length - 1
+          if (isLast || (hasList && mediaList!.length <= 1)) {
+            closeViewer()
+          } else {
+            dispatchMedia({ type: 'nextImage' })
+          }
+        })
+        .catch(() => {
+          // restore the photo if the delete failed
+          setDeleting(false)
+        })
+    }, DELETE_ANIMATION_MS)
   }, [activeMedia.id, deleteMedia, dispatchMedia, closeViewer, hasList, activeIndex, mediaList])
 
   // ---- keyboard ----
@@ -396,7 +406,13 @@ const PresentView = ({
 
   // translate + scale only: no per-frame border radius or clipping,
   // which would force expensive repaints of the photo
-  const stageStyle: React.CSSProperties = closing
+  const stageStyle: React.CSSProperties = deleting
+    ? {
+        transform: `translateY(${window.innerHeight * 1.2}px) rotate(15deg) scale(0.3)`,
+        opacity: 0,
+        transition: `transform ${DELETE_ANIMATION_MS}ms cubic-bezier(0.4, 0, 1, 1), opacity ${DELETE_ANIMATION_MS}ms ease-in`,
+      }
+    : closing
     ? {
         transform: `translateY(${window.innerHeight * 0.6}px) scale(0.55)`,
         opacity: 0,
@@ -468,7 +484,7 @@ const PresentView = ({
 
       {/* controls */}
       <PresentControls
-        visible={controlsVisible && !closing && closeDrag == 0}
+        visible={controlsVisible && !closing && !deleting && closeDrag == 0}
         favorite={favorite}
         onToggleFavorite={onToggleFavorite}
         onToggleInfo={toggleInfo}
