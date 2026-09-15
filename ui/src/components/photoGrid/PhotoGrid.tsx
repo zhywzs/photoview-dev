@@ -1,6 +1,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -171,6 +172,11 @@ const PhotoGrid = <T extends MediaGalleryFields>({
 
   // the top layer's level while a transition is running (null = no top layer)
   const [topLevel, setTopLevel] = useState<number | null>(null)
+  // scroll position to virtualize the base layer against during the commit
+  // render, before the programmatic scroll has propagated back as state
+  const [baseScrollOverride, setBaseScrollOverride] = useState<number | null>(
+    null
+  )
   const [viewProps, setViewProps] = useState<ViewProps>({
     baseScale: 1,
     topScale: 1,
@@ -356,7 +362,9 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       const offset =
         (t.baseAnchorTop - originY) * (visual / t.fromTile) -
         (t.topAnchorTop - originY) * (visual / t.toTile)
-      pendingScrollRef.current = window.scrollY - offset
+      const newScroll = window.scrollY - offset
+      pendingScrollRef.current = newScroll
+      setBaseScrollOverride(newScroll)
       transitionRef.current = null
       setTopLevel(null)
       if (baseLayerRef.current != null) baseLayerRef.current.style.opacity = ''
@@ -739,13 +747,22 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     }
   }, [ensureEngine, tileValue])
 
-  // apply a pending scroll once the committed layout is on screen
-  useEffect(() => {
+  // apply a pending scroll once the committed layout is on screen. This must
+  // run before paint (layout effect), otherwise the new level is painted at
+  // the old scroll position for a frame - the visible "flash" on a switch.
+  useLayoutEffect(() => {
     if (pendingScrollRef.current != null) {
       window.scrollTo(0, pendingScrollRef.current)
       pendingScrollRef.current = null
     }
   }, [zoom.level, topLevel])
+
+  // drop the virtualization override once the scroll listener has caught up
+  useEffect(() => {
+    if (baseScrollOverride == null) return
+    const timer = window.setTimeout(() => setBaseScrollOverride(null), 300)
+    return () => window.clearTimeout(timer)
+  }, [baseScrollOverride])
 
   // ---- floating date bar (dense levels) ----
   const [floatingDate, setFloatingDate] = useState<{
@@ -846,6 +863,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
             onVisibleRange={onVisibleRange}
             viewportScale={viewProps.baseScale}
             viewportOriginY={viewProps.originY}
+            viewportTopOverride={baseScrollOverride ?? undefined}
           />
         </div>
 

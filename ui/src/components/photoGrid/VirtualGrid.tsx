@@ -58,6 +58,11 @@ type VirtualGridProps<T> = {
   viewportScale?: number
   viewportOriginY?: number
   viewportOffsetY?: number
+  /**
+   * Force the virtualizer to use this scroll position for one render (used on
+   * a zoom commit, whose scroll is applied in the same commit).
+   */
+  viewportTopOverride?: number
 }
 
 type ViewportState = {
@@ -115,6 +120,7 @@ const VirtualGrid = <T,>({
   viewportScale = 1,
   viewportOriginY = 0,
   viewportOffsetY = 0,
+  viewportTopOverride,
 }: VirtualGridProps<T>) => {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [width, setWidth] = useState(0)
@@ -200,12 +206,17 @@ const VirtualGrid = <T,>({
     // map the viewport back through `translateY(offset) scale(scale)` about
     // the origin to get the range of container-local rows that end up visible
     const invScale = viewportScale > 0 ? 1 / viewportScale : 1
+    const scrollTop = viewportTopOverride ?? viewport.top
     const viewportTop =
       viewportOriginY +
-      (viewport.top - viewportOriginY - viewportOffsetY) * invScale
+      (scrollTop - viewportOriginY - viewportOffsetY) * invScale
     const viewportBottom =
       viewportOriginY +
-      (viewport.bottom - viewportOriginY - viewportOffsetY) * invScale
+      (scrollTop +
+        (viewport.bottom - viewport.top) -
+        viewportOriginY -
+        viewportOffsetY) *
+        invScale
 
     return layout.sections
       .map(section => {
@@ -256,6 +267,7 @@ const VirtualGrid = <T,>({
     viewportScale,
     viewportOriginY,
     viewportOffsetY,
+    viewportTopOverride,
   ])
 
   // Flat list of every visible tile, all siblings in one container so React
