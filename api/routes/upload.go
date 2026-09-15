@@ -15,7 +15,6 @@ import (
 
 	"github.com/photoview/photoview/api/graphql/auth"
 	"github.com/photoview/photoview/api/graphql/models"
-	"github.com/photoview/photoview/api/scanner/scanner_queue"
 )
 
 const maxUploadSize = 500 << 20 // 500 MB
@@ -138,8 +137,11 @@ func RegisterUploadRoutes(db *gorm.DB, router *mux.Router) {
 			_, _ = user.FavoriteMedia(db, media.ID, true)
 		}
 
-		// trigger background scan of the destination album
-		scanner_queue.AddAlbumToQueue(db, album.ID)
+		// NOTE: we deliberately do NOT trigger an album scan here.
+		// A scan followed by atlas regeneration can deadlock SQLite
+		// when concurrent GraphQL queries hold read locks. The frontend
+		// triggers scanAll after showing the upload result, which goes
+		// through the standard scanner queue infrastructure.
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(uploadResponse{

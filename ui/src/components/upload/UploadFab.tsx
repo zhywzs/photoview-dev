@@ -1,6 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { gql, useMutation } from '@apollo/client'
+
+const SCAN_ALL_MUTATION = gql`
+  mutation uploadFabScanAll {
+    scanAll {
+      success
+      message
+    }
+  }
+`
 
 type UploadFabProps = {
   onUploaded(): void
@@ -34,6 +44,7 @@ const UploadFab = ({ onUploaded }: UploadFabProps) => {
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState<string | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
+  const [scanAll] = useMutation(SCAN_ALL_MUTATION)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const pendingFilesRef = useRef<File[] | null>(null)
   const lastScrollY = useRef(0)
@@ -128,6 +139,10 @@ const UploadFab = ({ onUploaded }: UploadFabProps) => {
     setTimeout(() => setUploadResult(null), 3000)
 
     if (success > 0) {
+      // trigger a scan to generate thumbnails and process the uploads
+      // (goes through the standard scanner queue, avoids the SQLite
+      // deadlock that direct album scanning caused)
+      scanAll().catch(() => {})
       onUploaded()
     }
   }
