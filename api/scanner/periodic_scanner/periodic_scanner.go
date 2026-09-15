@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/photoview/photoview/api/graphql/models"
+	"github.com/photoview/photoview/api/graphql/models/actions"
 	"github.com/photoview/photoview/api/log"
 	"github.com/photoview/photoview/api/scanner/scanner_queue"
 	"gorm.io/gorm"
@@ -156,11 +157,13 @@ func (ps *periodicScanner) scanIntervalRunner() {
 				return
 			case <-ps.ticker_changed:
 				log.Info(nil, "Scan interval runner: New ticker detected")
-			case <-ticker.C:
-				log.Info(nil, "Scan interval runner: Starting periodic scan")
-				if err := ps.scannerQueue.AddAllToQueue(); err != nil {
-					log.Error(nil, "Scan interval runner: Failed to add all users to queue", "error", err)
-				}
+		case <-ticker.C:
+			log.Info(nil, "Scan interval runner: Starting periodic scan")
+			// purge expired trash before scanning
+			actions.PurgeExpiredTrash(ps.db)
+			if err := ps.scannerQueue.AddAllToQueue(); err != nil {
+				log.Error(nil, "Scan interval runner: Failed to add all users to queue", "error", err)
+			}
 			}
 		} else {
 			select {

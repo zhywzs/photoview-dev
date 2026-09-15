@@ -37,7 +37,8 @@ func textMatchVars(wild string) []interface{} {
 func ownedMediaScope(db *gorm.DB, userID int) *gorm.DB {
 	return db.
 		Joins("JOIN albums ON media.album_id = albums.id").
-		Where("albums.id IN (?)", db.Table("user_albums").Select("user_albums.album_id").Where("user_id = ?", userID))
+		Where("albums.id IN (?)", db.Table("user_albums").Select("user_albums.album_id").Where("user_id = ?", userID)).
+		Where("media.deleted_at IS NULL")
 }
 
 func Search(db *gorm.DB, query string, userID int, limitMedia *int, limitAlbums *int) (*models.SearchResult, error) {
@@ -65,6 +66,7 @@ func Search(db *gorm.DB, query string, userID int, limitMedia *int, limitAlbums 
 
 	err := db.Joins("Album").
 		Where("EXISTS (?)", userSubquery).
+		Where("media.deleted_at IS NULL").
 		Where("("+textMatchConditions(wildQuery)+")", textMatchVars(wildQuery)...).
 		Clauses(clause.OrderBy{
 			Expression: clause.Expr{

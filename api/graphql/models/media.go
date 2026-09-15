@@ -30,6 +30,7 @@ type Media struct {
 	SideCarHash     *string      `gorm:"unique"`
 	Faces           []*ImageFace `gorm:"constraint:OnDelete:CASCADE;"`
 	Blurhash        *string      `gorm:""`
+	DeletedAt       *time.Time   `gorm:"index"` // soft delete: non-nil = in trash
 }
 
 func (Media) TableName() string {

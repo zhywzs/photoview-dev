@@ -243,6 +243,26 @@ func AddUserToQueue(user *models.User) error {
 	return nil
 }
 
+// AddAlbumToQueue adds a single album to the scanner queue by its ID.
+// Used by the upload endpoint to process newly uploaded files.
+func AddAlbumToQueue(db *gorm.DB, albumID int) {
+	if global_scanner_queue.db == nil {
+		return
+	}
+
+	var album models.Album
+	if err := db.First(&album, albumID).Error; err != nil {
+		return
+	}
+
+	albumCache := scanner_cache.MakeAlbumCache()
+	global_scanner_queue.mutex.Lock()
+	global_scanner_queue.addJob(&ScannerJob{
+		ctx: scanner_task.NewTaskContext(context.Background(), db, &album, albumCache),
+	})
+	global_scanner_queue.mutex.Unlock()
+}
+
 // Queue should be locked prior to calling this function
 func (queue *ScannerQueue) addJob(job *ScannerJob) error {
 	if exists, err := queue.jobOnQueue(job); exists || err != nil {

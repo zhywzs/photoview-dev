@@ -10,7 +10,7 @@ func MyMedia(db *gorm.DB, user *models.User, order *models.Ordering, paginate *m
 		return nil, err
 	}
 
-	query := db.Where("media.album_id IN (SELECT user_albums.album_id FROM user_albums WHERE user_albums.user_id = ?)",
+	query := db.Where("media.album_id IN (SELECT user_albums.album_id FROM user_albums WHERE user_albums.user_id = ?) AND media.deleted_at IS NULL",
 		user.ID)
 	query = models.FormatSQL(query, order, paginate)
 

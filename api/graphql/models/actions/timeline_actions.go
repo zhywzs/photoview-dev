@@ -15,7 +15,8 @@ func MyTimeline(db *gorm.DB, user *models.User, paginate *models.Pagination, onl
 
 	query := db.
 		Joins("JOIN albums ON media.album_id = albums.id").
-		Where("albums.id IN (?)", db.Table("user_albums").Select("user_albums.album_id").Where("user_id = ?", user.ID))
+		Where("albums.id IN (?)", db.Table("user_albums").Select("user_albums.album_id").Where("user_id = ?", user.ID)).
+		Where("media.deleted_at IS NULL")
 
 	switch drivers.GetDatabaseDriverType(db) {
 	case drivers.POSTGRES:

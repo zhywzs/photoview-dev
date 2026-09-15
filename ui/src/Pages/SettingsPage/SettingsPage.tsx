@@ -4,6 +4,8 @@ import styled from 'styled-components'
 import { useIsAdmin } from '../../components/routes/AuthorizedRoute'
 import Layout from '../../components/layout/Layout'
 import ScannerSection from './ScannerSection'
+import TrashSection from './TrashSection'
+import StorageSection from './StorageSection'
 import UserPreferences from './UserPreferences'
 import UsersTable from './Users/UsersTable'
 import VersionInfo from './VersionInfo'
@@ -42,9 +44,11 @@ const SettingsPage = () => {
   return (
     <Layout title={t('title.settings', 'Settings')}>
       <UserPreferences />
+      <TrashSection />
       {isAdmin && (
         <>
           <ScannerSection />
+          <StorageSection />
           <UsersTable />
         </>
       )}

@@ -210,6 +210,7 @@ func (r *queryResolver) Media(ctx context.Context, id int, tokenCredentials *mod
 	err := db.
 		Joins("Album").
 		Where("media.id = ?", id).
+		Where("media.deleted_at IS NULL").
 		Where("EXISTS (SELECT * FROM user_albums WHERE user_albums.album_id = media.album_id AND user_albums.user_id = ?)",
 			user.ID).
 		Where("media.id IN (?)", db.Model(&models.MediaURL{}).Select("media_id").Where("media_urls.media_id = media.id")).
@@ -238,6 +239,7 @@ func (r *queryResolver) MediaList(ctx context.Context, ids []int) ([]*models.Med
 	err := db.Model(&media).
 		Joins("LEFT JOIN user_albums ON user_albums.album_id = media.album_id").
 		Where("media.id IN ?", ids).
+		Where("media.deleted_at IS NULL").
 		Where("user_albums.user_id = ?", user.ID).
 		Find(&media).Error
 

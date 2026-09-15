@@ -5,6 +5,8 @@ import React, {
   useState,
 } from 'react'
 import styled from 'styled-components'
+import { gql, useMutation } from '@apollo/client'
+import { useTranslation } from 'react-i18next'
 import PresentMedia from './PresentMedia'
 import PresentControls from './PresentControls'
 import MediaInfoPanel from './MediaInfoPanel'
@@ -13,6 +15,12 @@ import {
   GalleryAction,
 } from '../mediaGalleryReducer'
 import { MediaGalleryFields } from '../__generated__/MediaGalleryFields'
+
+const DELETE_MEDIA_MUTATION = gql`
+  mutation deleteMediaMutation($mediaId: ID!) {
+    deleteMedia(mediaId: $mediaId)
+  }
+`
 
 const StyledContainer = styled.div`
   position: fixed;
@@ -104,6 +112,13 @@ const PresentView = ({
 
   // ---- info panel ----
   const [infoOpen, setInfoOpen] = useState(false)
+
+  // ---- delete (trash) ----
+  const { t } = useTranslation()
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleteMedia, { loading: deleteLoading }] = useMutation<{
+    deleteMedia: boolean
+  }>(DELETE_MEDIA_MUTATION)
 
   // ---- neighbor previews (lazy) ----
   const [neighborsReady, setNeighborsReady] = useState(false)
@@ -197,6 +212,23 @@ const PresentView = ({
     setInfoOpen(open => !open)
     showControls()
   }, [showControls])
+
+  const confirmDelete = useCallback(() => {
+    setShowDeleteConfirm(false)
+    deleteMedia({ variables: { mediaId: activeMedia.id } })
+      .then(() => {
+        // navigate to next image, or close if this was the last one
+        const isLast = hasList && activeIndex === mediaList!.length - 1
+        if (isLast || (hasList && mediaList!.length <= 1)) {
+          closeViewer()
+        } else {
+          dispatchMedia({ type: 'nextImage' })
+        }
+      })
+      .catch(() => {
+        // stay on the image
+      })
+  }, [activeMedia.id, deleteMedia, dispatchMedia, closeViewer, hasList, activeIndex, mediaList])
 
   // ---- keyboard ----
   useEffect(() => {
@@ -444,7 +476,43 @@ const PresentView = ({
         onClose={closeViewer}
         onPrev={goToPrev}
         onNext={goToNext}
+        onDelete={() => setShowDeleteConfirm(true)}
       />
+
+      {/* delete confirmation dialog */}
+      {showDeleteConfirm && (
+        <>
+          <div
+            className="fixed inset-0 z-[130] bg-black/60"
+            onClick={() => setShowDeleteConfirm(false)}
+          />
+          <div className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-[131] bg-white dark:bg-dark-bg2 rounded-2xl shadow-2xl p-6 w-72 max-w-[90vw]">
+            <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">
+              {t('present.delete_confirm_title', '移入回收站?')}
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+              {t('present.delete_confirm_desc', '30 天内可在设置页恢复')}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                className="px-4 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-dark-bg"
+                onClick={() => setShowDeleteConfirm(false)}
+              >
+                {t('general.cancel', '取消')}
+              </button>
+              <button
+                className="px-4 py-2 rounded-lg text-sm bg-red-600 hover:bg-red-700 text-white disabled:opacity-50"
+                onClick={confirmDelete}
+                disabled={deleteLoading}
+              >
+                {deleteLoading
+                  ? t('present.deleting', '删除中…')
+                  : t('present.delete_confirm', '删除')}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* media info panel (bottom sheet on mobile, drawer on desktop) */}
       <MediaInfoPanel

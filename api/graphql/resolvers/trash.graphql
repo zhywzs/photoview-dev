@@ -1,0 +1,50 @@
+type TrashedMedia {
+  id: ID!
+  title: String!
+  "URL of the thumbnail for display in the trash list"
+  thumbnailUrl: String
+  "Original album's filesystem path"
+  originalAlbumPath: String!
+  deletedAt: Time!
+  "Days until permanent deletion (30 - days since deletion)"
+  daysRemaining: Int!
+  "Size of the original file in bytes"
+  fileSize: Int!
+}
+
+type StorageStats {
+  "Total capacity of the storage filesystem in bytes"
+  totalBytes: Int!
+  "Used bytes on the storage filesystem"
+  usedBytes: Int!
+  "Free bytes on the storage filesystem"
+  freeBytes: Int!
+  "Bytes used by the media cache (thumbnails/transcodes)"
+  mediaCacheBytes: Int!
+  "Average original photo size in the library, in bytes"
+  averagePhotoSize: Int!
+  "Estimated number of additional photos that fit in free space"
+  estimatedRemainingPhotos: Int!
+}
+
+extend type Query {
+  "Media in the trash of the logged in user, newest deletion first"
+  myTrash: [TrashedMedia!]! @isAuthorized
+
+  "Storage statistics for the media cache filesystem"
+  storageStats: StorageStats! @isAdmin
+}
+
+extend type Mutation {
+  "Move a media to the trash (soft delete, file stays on disk for 30 days)"
+  deleteMedia(mediaId: ID!): Boolean! @isAuthorized
+
+  "Restore a media from the trash"
+  restoreMedia(mediaId: ID!): Boolean! @isAuthorized
+
+  "Permanently delete a single media from the trash (removes file + cache)"
+  permanentlyDeleteMedia(mediaId: ID!): Boolean! @isAuthorized
+
+  "Permanently delete ALL trashed media (removes files + cache)"
+  emptyTrash: Int! @isAdmin
+}

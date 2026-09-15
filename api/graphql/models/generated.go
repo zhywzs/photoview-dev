@@ -120,6 +120,21 @@ type ShareTokenCredentials struct {
 	Password *string `json:"password,omitempty"`
 }
 
+type StorageStats struct {
+	// Total capacity of the storage filesystem in bytes
+	TotalBytes int `json:"totalBytes"`
+	// Used bytes on the storage filesystem
+	UsedBytes int `json:"usedBytes"`
+	// Free bytes on the storage filesystem
+	FreeBytes int `json:"freeBytes"`
+	// Bytes used by the media cache (thumbnails/transcodes)
+	MediaCacheBytes int `json:"mediaCacheBytes"`
+	// Average original photo size in the library, in bytes
+	AveragePhotoSize int `json:"averagePhotoSize"`
+	// Estimated number of additional photos that fit in free space
+	EstimatedRemainingPhotos int `json:"estimatedRemainingPhotos"`
+}
+
 type Subscription struct {
 }
 
@@ -134,6 +149,20 @@ type TimelineGroup struct {
 	MediaTotal int `json:"mediaTotal"`
 	// The day shared for all media in this timeline group
 	Date time.Time `json:"date"`
+}
+
+type TrashedMedia struct {
+	ID    int    `json:"id"`
+	Title string `json:"title"`
+	// URL of the thumbnail for display in the trash list
+	ThumbnailURL *string `json:"thumbnailUrl,omitempty"`
+	// Original album's filesystem path
+	OriginalAlbumPath string    `json:"originalAlbumPath"`
+	DeletedAt         time.Time `json:"deletedAt"`
+	// Days until permanent deletion (30 - days since deletion)
+	DaysRemaining int `json:"daysRemaining"`
+	// Size of the original file in bytes
+	FileSize int `json:"fileSize"`
 }
 
 // Supported language translations of the user interface

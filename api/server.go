@@ -97,6 +97,9 @@ func main() {
 	atlasRouter := endpointRouter.PathPrefix("/atlas").Subrouter()
 	routes.RegisterAtlasRoutes(db, atlasRouter)
 
+	uploadRouter := endpointRouter.PathPrefix("/upload").Subrouter()
+	routes.RegisterUploadRoutes(db, uploadRouter)
+
 	videoRouter := endpointRouter.PathPrefix("/video").Subrouter()
 	routes.RegisterVideoRoutes(db, videoRouter)
 

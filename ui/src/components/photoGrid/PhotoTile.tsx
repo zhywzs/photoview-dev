@@ -1,10 +1,21 @@
-import React from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import classNames from 'classnames'
+import { gql, useMutation } from '@apollo/client'
+import { useTranslation } from 'react-i18next'
 import { ProtectedImage } from '../photoGallery/ProtectedMedia'
 import { MediaType } from '../../__generated__/globalTypes'
 import { MediaGalleryFields } from '../photoGallery/__generated__/MediaGalleryFields'
 import { AtlasTile } from './atlas'
 import { thumbSourceFor } from './gridLayout'
+
+const DELETE_MEDIA_MUTATION = gql`
+  mutation deleteMediaFromTile($mediaId: ID!) {
+    deleteMedia(mediaId: $mediaId)
+  }
+`
+
+/** how long to hold before a long-press is registered (ms) */
+const LONG_PRESS_MS = 500
 
 /** hover actions render only on devices with a real mouse */
 const canHover =
@@ -45,11 +56,54 @@ const PhotoTile = ({
   onFavorite,
 }: PhotoTileProps) => {
   const src = thumbSourceFor(tileSize, media)
+  const { t } = useTranslation()
 
   const radius = tileSize >= 150 ? 10 : tileSize >= 80 ? 6 : 2
   const showBlurhash = tileSize >= 160
 
   const isVideo = media.type == MediaType.Video
+
+  // ---- long-press to delete (mobile) ----
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleteMedia, { loading: deleteLoading }] = useMutation<{
+    deleteMedia: boolean
+  }>(DELETE_MEDIA_MUTATION)
+
+  const longPressTimer = useRef<number | undefined>(undefined)
+  const longPressTriggered = useRef(false)
+
+  const startLongPress = useCallback(() => {
+    longPressTriggered.current = false
+    longPressTimer.current = window.setTimeout(() => {
+      longPressTriggered.current = true
+      setShowDeleteConfirm(true)
+    }, LONG_PRESS_MS)
+  }, [])
+
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimer.current != null) {
+      window.clearTimeout(longPressTimer.current)
+      longPressTimer.current = undefined
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => cancelLongPress()
+  }, [cancelLongPress])
+
+  const handleClick = useCallback(() => {
+    // suppress the click that follows a long-press
+    if (longPressTriggered.current) {
+      longPressTriggered.current = false
+      return
+    }
+    onClick?.()
+  }, [onClick])
+
+  const confirmDelete = useCallback(() => {
+    setShowDeleteConfirm(false)
+    deleteMedia({ variables: { mediaId: media.id } }).catch(() => {})
+  }, [deleteMedia, media.id])
 
   return (
     <div
@@ -65,7 +119,15 @@ const PhotoTile = ({
         borderRadius: radius,
         cursor: 'pointer',
       }}
-      onClick={onClick}
+      onClick={handleClick}
+      onTouchStart={startLongPress}
+      onTouchEnd={cancelLongPress}
+      onTouchMove={cancelLongPress}
+      onTouchCancel={cancelLongPress}
+      onContextMenu={e => {
+        // long-press on mobile triggers contextmenu; suppress it
+        if (longPressTriggered.current) e.preventDefault()
+      }}
       role="button"
       aria-label={media.title ?? media.id}
     >
@@ -154,6 +216,48 @@ const PhotoTile = ({
             </svg>
           </button>
         </div>
+      )}
+
+      {/* long-press delete confirmation (mobile) */}
+      {showDeleteConfirm && (
+        <>
+          <div
+            className="fixed inset-0 z-50 bg-black/60"
+            onClick={e => {
+              e.stopPropagation()
+              setShowDeleteConfirm(false)
+            }}
+          />
+          <div
+            className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 bg-white dark:bg-dark-bg2 rounded-2xl shadow-2xl p-6 w-72 max-w-[90vw]"
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">
+              {t('tile.delete_title', '移入回收站?')}
+            </h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-1 truncate">
+              {media.title}
+            </p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+              {t('tile.delete_desc', '30 天内可在设置页恢复')}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                className="px-4 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-dark-bg"
+                onClick={() => setShowDeleteConfirm(false)}
+              >
+                {t('general.cancel', '取消')}
+              </button>
+              <button
+                className="px-4 py-2 rounded-lg text-sm bg-red-600 hover:bg-red-700 text-white disabled:opacity-50"
+                onClick={confirmDelete}
+                disabled={deleteLoading}
+              >
+                {deleteLoading ? '...' : t('tile.delete_confirm', '删除')}
+              </button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   )

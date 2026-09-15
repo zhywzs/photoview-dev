@@ -24,6 +24,7 @@ func (r *albumResolver) Media(ctx context.Context, obj *models.Album, order *mod
 
 	query := db.
 		Where("media.album_id = ?", obj.ID).
+		Where("media.deleted_at IS NULL").
 		Where("media.id IN (?)", db.Model(&models.MediaURL{}).
 			Select("media_urls.media_id").
 			Where("media_urls.media_id = media.id"))

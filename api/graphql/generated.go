@@ -161,16 +161,20 @@ type ComplexityRoot struct {
 		ChangeUserPreferences       func(childComplexity int, language *string) int
 		CombineFaceGroups           func(childComplexity int, destinationFaceGroupID int, sourceFaceGroupIDs []int) int
 		CreateUser                  func(childComplexity int, username string, password *string, admin bool, rootPath *string) int
+		DeleteMedia                 func(childComplexity int, mediaID int) int
 		DeleteShareToken            func(childComplexity int, token string) int
 		DeleteUser                  func(childComplexity int, id int) int
 		DetachImageFaces            func(childComplexity int, imageFaceIDs []int) int
+		EmptyTrash                  func(childComplexity int) int
 		FavoriteMedia               func(childComplexity int, mediaID int, favorite bool) int
 		InitialSetupWizard          func(childComplexity int, username string, password string, rootPath string) int
 		MoveImageFaces              func(childComplexity int, imageFaceIDs []int, destinationFaceGroupID int) int
+		PermanentlyDeleteMedia      func(childComplexity int, mediaID int) int
 		ProtectShareToken           func(childComplexity int, token string, password *string) int
 		RecognizeUnlabeledFaces     func(childComplexity int) int
 		RegenerateThumbnailAtlases  func(childComplexity int) int
 		ResetAlbumCover             func(childComplexity int, albumID int) int
+		RestoreMedia                func(childComplexity int, mediaID int) int
 		ScanAll                     func(childComplexity int) int
 		ScanUser                    func(childComplexity int, userID int) int
 		SetAlbumCover               func(childComplexity int, coverID int) int
@@ -211,12 +215,14 @@ type ComplexityRoot struct {
 		MyMedia                    func(childComplexity int, order *models.Ordering, paginate *models.Pagination) int
 		MyMediaGeoJSON             func(childComplexity int) int
 		MyTimeline                 func(childComplexity int, paginate *models.Pagination, onlyFavorites *bool, fromDate *time.Time, toDate *time.Time) int
+		MyTrash                    func(childComplexity int) int
 		MyUser                     func(childComplexity int) int
 		MyUserPreferences          func(childComplexity int) int
 		Search                     func(childComplexity int, query string, limitMedia *int, limitAlbums *int) int
 		ShareToken                 func(childComplexity int, credentials models.ShareTokenCredentials) int
 		ShareTokenValidatePassword func(childComplexity int, credentials models.ShareTokenCredentials) int
 		SiteInfo                   func(childComplexity int) int
+		StorageStats               func(childComplexity int) int
 		User                       func(childComplexity int, order *models.Ordering, paginate *models.Pagination) int
 	}
 
@@ -252,6 +258,15 @@ type ComplexityRoot struct {
 		PeriodicScanInterval func(childComplexity int) int
 	}
 
+	StorageStats struct {
+		AveragePhotoSize         func(childComplexity int) int
+		EstimatedRemainingPhotos func(childComplexity int) int
+		FreeBytes                func(childComplexity int) int
+		MediaCacheBytes          func(childComplexity int) int
+		TotalBytes               func(childComplexity int) int
+		UsedBytes                func(childComplexity int) int
+	}
+
 	Subscription struct {
 		Notification func(childComplexity int) int
 	}
@@ -261,6 +276,16 @@ type ComplexityRoot struct {
 		Date       func(childComplexity int) int
 		Media      func(childComplexity int) int
 		MediaTotal func(childComplexity int) int
+	}
+
+	TrashedMedia struct {
+		DaysRemaining     func(childComplexity int) int
+		DeletedAt         func(childComplexity int) int
+		FileSize          func(childComplexity int) int
+		ID                func(childComplexity int) int
+		OriginalAlbumPath func(childComplexity int) int
+		ThumbnailURL      func(childComplexity int) int
+		Title             func(childComplexity int) int
 	}
 
 	User struct {
@@ -350,6 +375,10 @@ type MutationResolver interface {
 	ProtectShareToken(ctx context.Context, token string, password *string) (*models.ShareToken, error)
 	SetExpireShareToken(ctx context.Context, token string, expire *time.Time) (*models.ShareToken, error)
 	SetShareTokenLabel(ctx context.Context, token string, label *string) (*models.ShareToken, error)
+	DeleteMedia(ctx context.Context, mediaID int) (bool, error)
+	RestoreMedia(ctx context.Context, mediaID int) (bool, error)
+	PermanentlyDeleteMedia(ctx context.Context, mediaID int) (bool, error)
+	EmptyTrash(ctx context.Context) (int, error)
 	AuthorizeUser(ctx context.Context, username string, password string) (*models.AuthorizeResult, error)
 	InitialSetupWizard(ctx context.Context, username string, password string, rootPath string) (*models.AuthorizeResult, error)
 	UpdateUser(ctx context.Context, id int, username *string, password *string, admin *bool) (*models.User, error)
@@ -376,6 +405,8 @@ type QueryResolver interface {
 	ShareTokenValidatePassword(ctx context.Context, credentials models.ShareTokenCredentials) (bool, error)
 	SiteInfo(ctx context.Context) (*models.SiteInfo, error)
 	MyTimeline(ctx context.Context, paginate *models.Pagination, onlyFavorites *bool, fromDate *time.Time, toDate *time.Time) ([]*models.Media, error)
+	MyTrash(ctx context.Context) ([]*models.TrashedMedia, error)
+	StorageStats(ctx context.Context) (*models.StorageStats, error)
 	User(ctx context.Context, order *models.Ordering, paginate *models.Pagination) ([]*models.User, error)
 	MyUser(ctx context.Context) (*models.User, error)
 	MyUserPreferences(ctx context.Context) (*models.UserPreferences, error)
@@ -917,6 +948,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.CreateUser(childComplexity, args["username"].(string), args["password"].(*string), args["admin"].(bool), args["rootPath"].(*string)), true
+	case "Mutation.deleteMedia":
+		if e.ComplexityRoot.Mutation.DeleteMedia == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_deleteMedia_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.DeleteMedia(childComplexity, args["mediaId"].(int)), true
 	case "Mutation.deleteShareToken":
 		if e.ComplexityRoot.Mutation.DeleteShareToken == nil {
 			break
@@ -950,6 +992,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.DetachImageFaces(childComplexity, args["imageFaceIDs"].([]int)), true
+	case "Mutation.emptyTrash":
+		if e.ComplexityRoot.Mutation.EmptyTrash == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Mutation.EmptyTrash(childComplexity), true
 	case "Mutation.favoriteMedia":
 		if e.ComplexityRoot.Mutation.FavoriteMedia == nil {
 			break
@@ -983,6 +1031,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.MoveImageFaces(childComplexity, args["imageFaceIDs"].([]int), args["destinationFaceGroupID"].(int)), true
+	case "Mutation.permanentlyDeleteMedia":
+		if e.ComplexityRoot.Mutation.PermanentlyDeleteMedia == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_permanentlyDeleteMedia_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.PermanentlyDeleteMedia(childComplexity, args["mediaId"].(int)), true
 	case "Mutation.protectShareToken":
 		if e.ComplexityRoot.Mutation.ProtectShareToken == nil {
 			break
@@ -1017,6 +1076,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.ResetAlbumCover(childComplexity, args["albumID"].(int)), true
+	case "Mutation.restoreMedia":
+		if e.ComplexityRoot.Mutation.RestoreMedia == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_restoreMedia_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.RestoreMedia(childComplexity, args["mediaId"].(int)), true
 	case "Mutation.scanAll":
 		if e.ComplexityRoot.Mutation.ScanAll == nil {
 			break
@@ -1339,6 +1409,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.MyTimeline(childComplexity, args["paginate"].(*models.Pagination), args["onlyFavorites"].(*bool), args["fromDate"].(*time.Time), args["toDate"].(*time.Time)), true
+	case "Query.myTrash":
+		if e.ComplexityRoot.Query.MyTrash == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Query.MyTrash(childComplexity), true
 	case "Query.myUser":
 		if e.ComplexityRoot.Query.MyUser == nil {
 			break
@@ -1390,6 +1466,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.SiteInfo(childComplexity), true
+	case "Query.storageStats":
+		if e.ComplexityRoot.Query.StorageStats == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Query.StorageStats(childComplexity), true
 	case "Query.user":
 		if e.ComplexityRoot.Query.User == nil {
 			break
@@ -1526,6 +1608,43 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.SiteInfo.PeriodicScanInterval(childComplexity), true
 
+	case "StorageStats.averagePhotoSize":
+		if e.ComplexityRoot.StorageStats.AveragePhotoSize == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StorageStats.AveragePhotoSize(childComplexity), true
+	case "StorageStats.estimatedRemainingPhotos":
+		if e.ComplexityRoot.StorageStats.EstimatedRemainingPhotos == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StorageStats.EstimatedRemainingPhotos(childComplexity), true
+	case "StorageStats.freeBytes":
+		if e.ComplexityRoot.StorageStats.FreeBytes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StorageStats.FreeBytes(childComplexity), true
+	case "StorageStats.mediaCacheBytes":
+		if e.ComplexityRoot.StorageStats.MediaCacheBytes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StorageStats.MediaCacheBytes(childComplexity), true
+	case "StorageStats.totalBytes":
+		if e.ComplexityRoot.StorageStats.TotalBytes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StorageStats.TotalBytes(childComplexity), true
+	case "StorageStats.usedBytes":
+		if e.ComplexityRoot.StorageStats.UsedBytes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StorageStats.UsedBytes(childComplexity), true
+
 	case "Subscription.notification":
 		if e.ComplexityRoot.Subscription.Notification == nil {
 			break
@@ -1557,6 +1676,49 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.TimelineGroup.MediaTotal(childComplexity), true
+
+	case "TrashedMedia.daysRemaining":
+		if e.ComplexityRoot.TrashedMedia.DaysRemaining == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TrashedMedia.DaysRemaining(childComplexity), true
+	case "TrashedMedia.deletedAt":
+		if e.ComplexityRoot.TrashedMedia.DeletedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TrashedMedia.DeletedAt(childComplexity), true
+	case "TrashedMedia.fileSize":
+		if e.ComplexityRoot.TrashedMedia.FileSize == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TrashedMedia.FileSize(childComplexity), true
+	case "TrashedMedia.id":
+		if e.ComplexityRoot.TrashedMedia.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TrashedMedia.ID(childComplexity), true
+	case "TrashedMedia.originalAlbumPath":
+		if e.ComplexityRoot.TrashedMedia.OriginalAlbumPath == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TrashedMedia.OriginalAlbumPath(childComplexity), true
+	case "TrashedMedia.thumbnailUrl":
+		if e.ComplexityRoot.TrashedMedia.ThumbnailURL == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TrashedMedia.ThumbnailURL(childComplexity), true
+	case "TrashedMedia.title":
+		if e.ComplexityRoot.TrashedMedia.Title == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TrashedMedia.Title(childComplexity), true
 
 	case "User.admin":
 		if e.ComplexityRoot.User.Admin == nil {
@@ -1766,7 +1928,7 @@ func newExecutionContext(
 	}
 }
 
-//go:embed "resolvers/album.graphql" "resolvers/atlas.graphql" "resolvers/faces.graphql" "resolvers/media.graphql" "resolvers/media_geo_json.graphql" "resolvers/notification.graphql" "resolvers/root.graphql" "resolvers/scanner.graphql" "resolvers/search.graphql" "resolvers/share_token.graphql" "resolvers/site_info.graphql" "resolvers/timeline.graphql" "resolvers/user.graphql"
+//go:embed "resolvers/album.graphql" "resolvers/atlas.graphql" "resolvers/faces.graphql" "resolvers/media.graphql" "resolvers/media_geo_json.graphql" "resolvers/notification.graphql" "resolvers/root.graphql" "resolvers/scanner.graphql" "resolvers/search.graphql" "resolvers/share_token.graphql" "resolvers/site_info.graphql" "resolvers/timeline.graphql" "resolvers/trash.graphql" "resolvers/user.graphql"
 var sourcesFS embed.FS
 
 func sourceData(filename string) string {
@@ -1790,6 +1952,7 @@ var sources = []*ast.Source{
 	{Name: "resolvers/share_token.graphql", Input: sourceData("resolvers/share_token.graphql"), BuiltIn: false},
 	{Name: "resolvers/site_info.graphql", Input: sourceData("resolvers/site_info.graphql"), BuiltIn: false},
 	{Name: "resolvers/timeline.graphql", Input: sourceData("resolvers/timeline.graphql"), BuiltIn: false},
+	{Name: "resolvers/trash.graphql", Input: sourceData("resolvers/trash.graphql"), BuiltIn: false},
 	{Name: "resolvers/user.graphql", Input: sourceData("resolvers/user.graphql"), BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
@@ -2098,6 +2261,44 @@ func (ec *executionContext) childFields_SiteInfo(ctx context.Context, field grap
 		return ec.fieldContext_SiteInfo_concurrentWorkers(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type SiteInfo", field.Name)
+}
+
+func (ec *executionContext) childFields_StorageStats(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "totalBytes":
+		return ec.fieldContext_StorageStats_totalBytes(ctx, field)
+	case "usedBytes":
+		return ec.fieldContext_StorageStats_usedBytes(ctx, field)
+	case "freeBytes":
+		return ec.fieldContext_StorageStats_freeBytes(ctx, field)
+	case "mediaCacheBytes":
+		return ec.fieldContext_StorageStats_mediaCacheBytes(ctx, field)
+	case "averagePhotoSize":
+		return ec.fieldContext_StorageStats_averagePhotoSize(ctx, field)
+	case "estimatedRemainingPhotos":
+		return ec.fieldContext_StorageStats_estimatedRemainingPhotos(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type StorageStats", field.Name)
+}
+
+func (ec *executionContext) childFields_TrashedMedia(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_TrashedMedia_id(ctx, field)
+	case "title":
+		return ec.fieldContext_TrashedMedia_title(ctx, field)
+	case "thumbnailUrl":
+		return ec.fieldContext_TrashedMedia_thumbnailUrl(ctx, field)
+	case "originalAlbumPath":
+		return ec.fieldContext_TrashedMedia_originalAlbumPath(ctx, field)
+	case "deletedAt":
+		return ec.fieldContext_TrashedMedia_deletedAt(ctx, field)
+	case "daysRemaining":
+		return ec.fieldContext_TrashedMedia_daysRemaining(ctx, field)
+	case "fileSize":
+		return ec.fieldContext_TrashedMedia_fileSize(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TrashedMedia", field.Name)
 }
 
 func (ec *executionContext) childFields_User(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -2430,6 +2631,20 @@ func (ec *executionContext) field_Mutation_createUser_args(ctx context.Context, 
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_deleteMedia_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "mediaId",
+		func(ctx context.Context, v any) (int, error) {
+			return ec.unmarshalNID2int(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["mediaId"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_deleteShareToken_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -2546,6 +2761,20 @@ func (ec *executionContext) field_Mutation_moveImageFaces_args(ctx context.Conte
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_permanentlyDeleteMedia_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "mediaId",
+		func(ctx context.Context, v any) (int, error) {
+			return ec.unmarshalNID2int(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["mediaId"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_protectShareToken_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -2579,6 +2808,20 @@ func (ec *executionContext) field_Mutation_resetAlbumCover_args(ctx context.Cont
 		return nil, err
 	}
 	args["albumID"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_restoreMedia_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "mediaId",
+		func(ctx context.Context, v any) (int, error) {
+			return ec.unmarshalNID2int(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["mediaId"] = arg0
 	return args, nil
 }
 
@@ -6335,6 +6578,213 @@ func (ec *executionContext) fieldContext_Mutation_setShareTokenLabel(ctx context
 	return fc, nil
 }
 
+func (ec *executionContext) _Mutation_deleteMedia(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_deleteMedia(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().DeleteMedia(ctx, fc.Args["mediaId"].(int))
+		},
+		func(ctx context.Context, next graphql.Resolver) graphql.Resolver {
+			directive0 := next
+
+			directive1 := func(ctx context.Context) (any, error) {
+				if ec.Directives.IsAuthorized == nil {
+					var zeroVal bool
+					return zeroVal, errors.New("directive isAuthorized is not implemented")
+				}
+				return ec.Directives.IsAuthorized(ctx, nil, directive0)
+			}
+
+			next = directive1
+			return next
+		},
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_deleteMedia(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_deleteMedia_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_restoreMedia(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_restoreMedia(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().RestoreMedia(ctx, fc.Args["mediaId"].(int))
+		},
+		func(ctx context.Context, next graphql.Resolver) graphql.Resolver {
+			directive0 := next
+
+			directive1 := func(ctx context.Context) (any, error) {
+				if ec.Directives.IsAuthorized == nil {
+					var zeroVal bool
+					return zeroVal, errors.New("directive isAuthorized is not implemented")
+				}
+				return ec.Directives.IsAuthorized(ctx, nil, directive0)
+			}
+
+			next = directive1
+			return next
+		},
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_restoreMedia(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_restoreMedia_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_permanentlyDeleteMedia(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_permanentlyDeleteMedia(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().PermanentlyDeleteMedia(ctx, fc.Args["mediaId"].(int))
+		},
+		func(ctx context.Context, next graphql.Resolver) graphql.Resolver {
+			directive0 := next
+
+			directive1 := func(ctx context.Context) (any, error) {
+				if ec.Directives.IsAuthorized == nil {
+					var zeroVal bool
+					return zeroVal, errors.New("directive isAuthorized is not implemented")
+				}
+				return ec.Directives.IsAuthorized(ctx, nil, directive0)
+			}
+
+			next = directive1
+			return next
+		},
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_permanentlyDeleteMedia(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_permanentlyDeleteMedia_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_emptyTrash(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_emptyTrash(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Mutation().EmptyTrash(ctx)
+		},
+		func(ctx context.Context, next graphql.Resolver) graphql.Resolver {
+			directive0 := next
+
+			directive1 := func(ctx context.Context) (any, error) {
+				if ec.Directives.IsAdmin == nil {
+					var zeroVal int
+					return zeroVal, errors.New("directive isAdmin is not implemented")
+				}
+				return ec.Directives.IsAdmin(ctx, nil, directive0)
+			}
+
+			next = directive1
+			return next
+		},
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_emptyTrash(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Mutation", field, true, true, errors.New("field of type Int does not have child fields"))
+}
+
 func (ec *executionContext) _Mutation_authorizeUser(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -7703,6 +8153,96 @@ func (ec *executionContext) fieldContext_Query_myTimeline(ctx context.Context, f
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_myTrash(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_myTrash(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().MyTrash(ctx)
+		},
+		func(ctx context.Context, next graphql.Resolver) graphql.Resolver {
+			directive0 := next
+
+			directive1 := func(ctx context.Context) (any, error) {
+				if ec.Directives.IsAuthorized == nil {
+					var zeroVal []*models.TrashedMedia
+					return zeroVal, errors.New("directive isAuthorized is not implemented")
+				}
+				return ec.Directives.IsAuthorized(ctx, nil, directive0)
+			}
+
+			next = directive1
+			return next
+		},
+		func(ctx context.Context, selections ast.SelectionSet, v []*models.TrashedMedia) graphql.Marshaler {
+			return ec.marshalNTrashedMedia2ᚕᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐTrashedMediaᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_myTrash(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TrashedMedia(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_storageStats(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_storageStats(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().StorageStats(ctx)
+		},
+		func(ctx context.Context, next graphql.Resolver) graphql.Resolver {
+			directive0 := next
+
+			directive1 := func(ctx context.Context) (any, error) {
+				if ec.Directives.IsAdmin == nil {
+					var zeroVal *models.StorageStats
+					return zeroVal, errors.New("directive isAdmin is not implemented")
+				}
+				return ec.Directives.IsAdmin(ctx, nil, directive0)
+			}
+
+			next = directive1
+			return next
+		},
+		func(ctx context.Context, selections ast.SelectionSet, v *models.StorageStats) graphql.Marshaler {
+			return ec.marshalNStorageStats2ᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐStorageStats(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_storageStats(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_StorageStats(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_user(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -8466,6 +9006,144 @@ func (ec *executionContext) fieldContext_SiteInfo_concurrentWorkers(_ context.Co
 	return graphql.NewScalarFieldContext("SiteInfo", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
+func (ec *executionContext) _StorageStats_totalBytes(ctx context.Context, field graphql.CollectedField, obj *models.StorageStats) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StorageStats_totalBytes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TotalBytes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StorageStats_totalBytes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("StorageStats", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _StorageStats_usedBytes(ctx context.Context, field graphql.CollectedField, obj *models.StorageStats) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StorageStats_usedBytes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UsedBytes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StorageStats_usedBytes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("StorageStats", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _StorageStats_freeBytes(ctx context.Context, field graphql.CollectedField, obj *models.StorageStats) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StorageStats_freeBytes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.FreeBytes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StorageStats_freeBytes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("StorageStats", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _StorageStats_mediaCacheBytes(ctx context.Context, field graphql.CollectedField, obj *models.StorageStats) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StorageStats_mediaCacheBytes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.MediaCacheBytes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StorageStats_mediaCacheBytes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("StorageStats", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _StorageStats_averagePhotoSize(ctx context.Context, field graphql.CollectedField, obj *models.StorageStats) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StorageStats_averagePhotoSize(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.AveragePhotoSize, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StorageStats_averagePhotoSize(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("StorageStats", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _StorageStats_estimatedRemainingPhotos(ctx context.Context, field graphql.CollectedField, obj *models.StorageStats) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StorageStats_estimatedRemainingPhotos(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.EstimatedRemainingPhotos, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StorageStats_estimatedRemainingPhotos(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("StorageStats", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
 func (ec *executionContext) _Subscription_notification(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
 	return graphql.ResolveFieldStream(
 		ctx,
@@ -8606,6 +9284,167 @@ func (ec *executionContext) _TimelineGroup_date(ctx context.Context, field graph
 }
 func (ec *executionContext) fieldContext_TimelineGroup_date(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("TimelineGroup", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _TrashedMedia_id(ctx context.Context, field graphql.CollectedField, obj *models.TrashedMedia) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TrashedMedia_id(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNID2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TrashedMedia_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TrashedMedia", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _TrashedMedia_title(ctx context.Context, field graphql.CollectedField, obj *models.TrashedMedia) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TrashedMedia_title(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Title, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TrashedMedia_title(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TrashedMedia", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TrashedMedia_thumbnailUrl(ctx context.Context, field graphql.CollectedField, obj *models.TrashedMedia) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TrashedMedia_thumbnailUrl(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ThumbnailURL, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_TrashedMedia_thumbnailUrl(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TrashedMedia", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TrashedMedia_originalAlbumPath(ctx context.Context, field graphql.CollectedField, obj *models.TrashedMedia) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TrashedMedia_originalAlbumPath(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.OriginalAlbumPath, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TrashedMedia_originalAlbumPath(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TrashedMedia", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TrashedMedia_deletedAt(ctx context.Context, field graphql.CollectedField, obj *models.TrashedMedia) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TrashedMedia_deletedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.DeletedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
+			return ec.marshalNTime2timeᚐTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TrashedMedia_deletedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TrashedMedia", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _TrashedMedia_daysRemaining(ctx context.Context, field graphql.CollectedField, obj *models.TrashedMedia) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TrashedMedia_daysRemaining(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.DaysRemaining, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TrashedMedia_daysRemaining(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TrashedMedia", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _TrashedMedia_fileSize(ctx context.Context, field graphql.CollectedField, obj *models.TrashedMedia) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TrashedMedia_fileSize(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.FileSize, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TrashedMedia_fileSize(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TrashedMedia", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _User_id(ctx context.Context, field graphql.CollectedField, obj *models.User) (ret graphql.Marshaler) {
@@ -11923,6 +12762,34 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "deleteMedia":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_deleteMedia(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "restoreMedia":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_restoreMedia(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "permanentlyDeleteMedia":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_permanentlyDeleteMedia(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "emptyTrash":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_emptyTrash(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "authorizeUser":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_authorizeUser(ctx, field)
@@ -12445,6 +13312,50 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "myTrash":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_myTrash(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "storageStats":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_storageStats(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "user":
 			field := field
 
@@ -12877,6 +13788,69 @@ func (ec *executionContext) _SiteInfo(ctx context.Context, sel ast.SelectionSet,
 	return out
 }
 
+var storageStatsImplementors = []string{"StorageStats"}
+
+func (ec *executionContext) _StorageStats(ctx context.Context, sel ast.SelectionSet, obj *models.StorageStats) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, storageStatsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("StorageStats")
+		case "totalBytes":
+			out.Values[i] = ec._StorageStats_totalBytes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "usedBytes":
+			out.Values[i] = ec._StorageStats_usedBytes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "freeBytes":
+			out.Values[i] = ec._StorageStats_freeBytes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "mediaCacheBytes":
+			out.Values[i] = ec._StorageStats_mediaCacheBytes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "averagePhotoSize":
+			out.Values[i] = ec._StorageStats_averagePhotoSize(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "estimatedRemainingPhotos":
+			out.Values[i] = ec._StorageStats_estimatedRemainingPhotos(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var subscriptionImplementors = []string{"Subscription"}
 
 func (ec *executionContext) _Subscription(ctx context.Context, sel ast.SelectionSet) func(ctx context.Context) graphql.Marshaler {
@@ -12926,6 +13900,74 @@ func (ec *executionContext) _TimelineGroup(ctx context.Context, sel ast.Selectio
 			}
 		case "date":
 			out.Values[i] = ec._TimelineGroup_date(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var trashedMediaImplementors = []string{"TrashedMedia"}
+
+func (ec *executionContext) _TrashedMedia(ctx context.Context, sel ast.SelectionSet, obj *models.TrashedMedia) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, trashedMediaImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TrashedMedia")
+		case "id":
+			out.Values[i] = ec._TrashedMedia_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "title":
+			out.Values[i] = ec._TrashedMedia_title(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "thumbnailUrl":
+			out.Values[i] = ec._TrashedMedia_thumbnailUrl(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "originalAlbumPath":
+			out.Values[i] = ec._TrashedMedia_originalAlbumPath(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "deletedAt":
+			out.Values[i] = ec._TrashedMedia_deletedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "daysRemaining":
+			out.Values[i] = ec._TrashedMedia_daysRemaining(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "fileSize":
+			out.Values[i] = ec._TrashedMedia_fileSize(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -14027,6 +15069,16 @@ func (ec *executionContext) marshalNSiteInfo2ᚖgithubᚗcomᚋphotoviewᚋphoto
 	return ec._SiteInfo(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNStorageStats2ᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐStorageStats(ctx context.Context, sel ast.SelectionSet, v *models.StorageStats) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._StorageStats(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNString2string(ctx context.Context, v any) (string, error) {
 	res, err := graphql.UnmarshalString(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -14057,6 +15109,32 @@ func (ec *executionContext) marshalNTime2timeᚐTime(ctx context.Context, sel as
 		}
 	}
 	return res
+}
+
+func (ec *executionContext) marshalNTrashedMedia2ᚕᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐTrashedMediaᚄ(ctx context.Context, sel ast.SelectionSet, v []*models.TrashedMedia) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNTrashedMedia2ᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐTrashedMedia(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNTrashedMedia2ᚖgithubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐTrashedMedia(ctx context.Context, sel ast.SelectionSet, v *models.TrashedMedia) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._TrashedMedia(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNUser2githubᚗcomᚋphotoviewᚋphotoviewᚋapiᚋgraphqlᚋmodelsᚐUser(ctx context.Context, sel ast.SelectionSet, v models.User) graphql.Marshaler {

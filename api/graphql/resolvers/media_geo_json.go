@@ -34,6 +34,7 @@ func (r *queryResolver) MyMediaGeoJSON(ctx context.Context) (any, error) {
 		Where("media_exif.gps_latitude IS NOT NULL").
 		Where("media_exif.gps_longitude IS NOT NULL").
 		Where("media_urls.purpose = 'thumbnail'").
+		Where("media.deleted_at IS NULL").
 		Where("user_albums.user_id = ?", user.ID).
 		Scan(&media).Error
 

@@ -1,10 +1,14 @@
-import { gql } from '@apollo/client'
-import React, { useContext } from 'react'
+import { gql, useQuery } from '@apollo/client'
+import React, { useCallback, useContext } from 'react'
 import { Helmet } from 'react-helmet'
+import { useLocation } from 'react-router-dom'
+import { useApolloClient } from '@apollo/client'
 import Header from '../header/Header'
 import { Authorized } from '../routes/AuthorizedRoute'
 import { Sidebar, SidebarContext } from '../sidebar/Sidebar'
 import MainMenu from './MainMenu'
+import UploadFab from '../upload/UploadFab'
+import { authToken } from '../../helpers/authentication'
 
 export const ADMIN_QUERY = gql`
   query adminQuery {
@@ -14,6 +18,9 @@ export const ADMIN_QUERY = gql`
   }
 `
 
+/** routes where the upload FAB is shown */
+const UPLOAD_ROUTES = ['/timeline', '/favorites', '/albums', '/album/', '/people']
+
 type LayoutProps = {
   children: React.ReactNode
   title: string
@@ -21,6 +28,17 @@ type LayoutProps = {
 
 const Layout = ({ children, title, ...otherProps }: LayoutProps) => {
   const { pinned, content: sidebarContent } = useContext(SidebarContext)
+  const location = useLocation()
+  const apolloClient = useApolloClient()
+
+  const showUploadFab =
+    authToken() != null &&
+    UPLOAD_ROUTES.some(route => location.pathname.startsWith(route))
+
+  const handleUploaded = useCallback(() => {
+    // refetch all queries so the new media appears immediately
+    apolloClient.refetchQueries({ include: 'active' })
+  }, [apolloClient])
 
   return (
     <>
@@ -43,6 +61,7 @@ const Layout = ({ children, title, ...otherProps }: LayoutProps) => {
           </div>
         </div>
         <Sidebar />
+        {showUploadFab && <UploadFab onUploaded={handleUploaded} />}
       </div>
     </>
   )
