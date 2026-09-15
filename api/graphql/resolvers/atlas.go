@@ -11,16 +11,22 @@ import (
 )
 
 // MediaAtlases is the resolver for the mediaAtlases field.
-func (r *queryResolver) MediaAtlases(ctx context.Context, ids []int) ([]*models.MediaAtlas, error) {
+func (r *queryResolver) MediaAtlases(ctx context.Context, ids []int, tileSize *int) ([]*models.MediaAtlas, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
 		return nil, auth.ErrUnauthorized
 	}
 
+	// default to the small (128px) atlas for backward compatibility
+	effectiveTileSize := models.AtlasTileSmall
+	if tileSize != nil {
+		effectiveTileSize = *tileSize
+	}
+
 	var atlases []models.ThumbnailAtlas
 	err := r.DB(ctx).
 		Preload("Entries", "media_id IN ?", ids).
-		Where("user_id = ? AND id IN (?)", user.ID,
+		Where("user_id = ? AND tile_size = ? AND id IN (?)", user.ID, effectiveTileSize,
 			r.DB(ctx).Model(&models.ThumbnailAtlasEntry{}).
 				Select("thumbnail_atlas_id").
 				Where("user_id = ? AND media_id IN ?", user.ID, ids)).
@@ -45,8 +51,8 @@ func (r *queryResolver) MediaAtlases(ctx context.Context, ids []int) ([]*models.
 
 		result = append(result, &models.MediaAtlas{
 			URL:      endpoint.String(),
-			TileSize: models.AtlasTileSizePx,
-			GridSize: models.AtlasGridSize,
+			TileSize: sheet.TileSize,
+			GridSize: models.AtlasGridSizeForTile(sheet.TileSize),
 			Entries:  entries,
 		})
 	}

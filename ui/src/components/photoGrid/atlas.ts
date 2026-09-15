@@ -2,8 +2,8 @@ import { gql } from '@apollo/client'
 import { mediaAtlases, mediaAtlasesVariables } from './__generated__/mediaAtlases'
 
 export const MEDIA_ATLASES_QUERY = gql`
-  query mediaAtlases($ids: [ID!]!) {
-    mediaAtlases(ids: $ids) {
+  query mediaAtlases($ids: [ID!]!, $tileSize: Int) {
+    mediaAtlases(ids: $ids, tileSize: $tileSize) {
       url
       tileSize
       gridSize

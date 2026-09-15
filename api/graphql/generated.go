@@ -204,7 +204,7 @@ type ComplexityRoot struct {
 		FilterMedia                func(childComplexity int, query *string, dateFrom *time.Time, dateTo *time.Time, location *models.GeoBoundingBox, onlyFavorites *bool, order *models.Ordering, paginate *models.Pagination) int
 		MapboxToken                func(childComplexity int) int
 		Media                      func(childComplexity int, id int, tokenCredentials *models.ShareTokenCredentials) int
-		MediaAtlases               func(childComplexity int, ids []int) int
+		MediaAtlases               func(childComplexity int, ids []int, tileSize *int) int
 		MediaList                  func(childComplexity int, ids []int) int
 		MyAlbums                   func(childComplexity int, order *models.Ordering, paginate *models.Pagination, onlyRoot *bool, showEmpty *bool, onlyWithFavorites *bool) int
 		MyFaceGroups               func(childComplexity int, paginate *models.Pagination) int
@@ -362,7 +362,7 @@ type MutationResolver interface {
 type QueryResolver interface {
 	MyAlbums(ctx context.Context, order *models.Ordering, paginate *models.Pagination, onlyRoot *bool, showEmpty *bool, onlyWithFavorites *bool) ([]*models.Album, error)
 	Album(ctx context.Context, id int, tokenCredentials *models.ShareTokenCredentials) (*models.Album, error)
-	MediaAtlases(ctx context.Context, ids []int) ([]*models.MediaAtlas, error)
+	MediaAtlases(ctx context.Context, ids []int, tileSize *int) ([]*models.MediaAtlas, error)
 	MyFaceGroups(ctx context.Context, paginate *models.Pagination) ([]*models.FaceGroup, error)
 	FaceGroup(ctx context.Context, id int) (*models.FaceGroup, error)
 	MyMedia(ctx context.Context, order *models.Ordering, paginate *models.Pagination) ([]*models.Media, error)
@@ -1277,7 +1277,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.MediaAtlases(childComplexity, args["ids"].([]int)), true
+		return e.ComplexityRoot.Query.MediaAtlases(childComplexity, args["ids"].([]int), args["tileSize"].(*int)), true
 	case "Query.mediaList":
 		if e.ComplexityRoot.Query.MediaList == nil {
 			break
@@ -3007,6 +3007,14 @@ func (ec *executionContext) field_Query_mediaAtlases_args(ctx context.Context, r
 		return nil, err
 	}
 	args["ids"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "tileSize",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["tileSize"] = arg1
 	return args, nil
 }
 
@@ -7052,7 +7060,7 @@ func (ec *executionContext) _Query_mediaAtlases(ctx context.Context, field graph
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().MediaAtlases(ctx, fc.Args["ids"].([]int))
+			return ec.Resolvers.Query().MediaAtlases(ctx, fc.Args["ids"].([]int), fc.Args["tileSize"].(*int))
 		},
 		func(ctx context.Context, next graphql.Resolver) graphql.Resolver {
 			directive0 := next

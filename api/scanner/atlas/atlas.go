@@ -1,8 +1,11 @@
-// Package atlas generates thumbnail sprite sheets ("atlases") for the
-// dense gallery zoom levels: instead of loading one image per photo
-// (~1800 requests for a full 30-column screen), the photos of a user are
-// bundled into 8x8 grids of 128px tiles, so a screen-full of thumbnails
-// arrives in a few dozen requests.
+// Package atlas generates thumbnail sprite sheets ("atlases") for all
+// gallery zoom levels. Two sizes are produced:
+//   - 128px tiles (8x8 grid, 64 photos/sheet) for dense levels (15/30 columns)
+//   - 256px tiles (4x4 grid, 16 photos/sheet) for sparse levels (3/5 columns)
+//
+// Instead of loading one image per photo (~1800 requests for a full
+// 30-column screen, ~20 x 47KB requests for a 3-column screen), entire
+// screens arrive in a few requests.
 package atlas
 
 import (
@@ -21,17 +24,22 @@ import (
 	"gorm.io/gorm"
 )
 
-const (
-	tileSize  = models.AtlasTileSizePx
-	gridSize  = models.AtlasGridSize
-	sheetSize = tileSize * gridSize // 1024
-	chunkSize = gridSize * gridSize // 64 media per atlas
-)
-
 type atlasMedia struct {
 	MediaID  int    `gorm:"column:id"`
 	AlbumID  int    `gorm:"column:album_id"`
 	TinyName string `gorm:"column:tiny_name"`
+	SmallName string `gorm:"column:small_name"`
+}
+
+type atlasSpec struct {
+	tileSize  int
+	gridSize  int
+	urlSuffix string // which cached thumbnail to read from
+}
+
+var specs = []atlasSpec{
+	{models.AtlasTileSmall, models.AtlasGridSmall, "tiny_name"},
+	{models.AtlasTileLarge, models.AtlasGridLarge, "small_name"},
 }
 
 // RegenerateAllAtlasesAsync rebuilds the atlases of every user in the
@@ -49,7 +57,7 @@ func RegenerateAllAtlasesAsync(db *gorm.DB) {
 	}()
 }
 
-// RegenerateAllAtlases rebuilds the sprite sheets of every user.
+// RegenerateAllAtlases rebuilds all sprite sheets (both sizes) of every user.
 func RegenerateAllAtlases(db *gorm.DB) error {
 	var users []models.User
 	if err := db.Find(&users).Error; err != nil {
@@ -71,11 +79,14 @@ func atlasDir(userID int) string {
 func regenerateAtlasesForUser(db *gorm.DB, user *models.User) error {
 	var media []atlasMedia
 	err := db.Table("media").
-		Select("media.id as id, media.album_id as album_id, media_urls.media_name as tiny_name").
+		Select(`media.id as id, media.album_id as album_id,
+			tiny.media_name as tiny_name, small.media_name as small_name`).
 		Joins("JOIN albums ON media.album_id = albums.id").
 		Joins("JOIN user_albums ON user_albums.album_id = albums.id AND user_albums.user_id = ?", user.ID).
-		Joins("JOIN media_urls ON media_urls.media_id = media.id AND media_urls.purpose = ?", models.PhotoThumbnailTiny).
+		Joins("LEFT JOIN media_urls tiny ON tiny.media_id = media.id AND tiny.purpose = ?", models.PhotoThumbnailTiny).
+		Joins("LEFT JOIN media_urls small ON small.media_id = media.id AND small.purpose = ?", models.PhotoThumbnailSmall).
 		Where("media.type = ?", models.MediaTypePhoto).
+		Where("tiny.media_name IS NOT NULL AND small.media_name IS NOT NULL").
 		Order("media.date_shot DESC, media.id DESC").
 		Scan(&media).Error
 	if err != nil {
@@ -97,6 +108,22 @@ func regenerateAtlasesForUser(db *gorm.DB, user *models.User) error {
 		return fmt.Errorf("creating atlas dir: %w", err)
 	}
 
+	for _, spec := range specs {
+		if err := generateAtlasSize(db, user, media, dir, spec); err != nil {
+			return fmt.Errorf("tileSize %d: %w", spec.tileSize, err)
+		}
+	}
+
+	log.Info(nil, "Generated thumbnail atlases",
+		"user", user.Username, "media", len(media),
+		"sheets", (len(media)+63)/64+(len(media)+15)/16)
+	return nil
+}
+
+func generateAtlasSize(db *gorm.DB, user *models.User, media []atlasMedia, dir string, spec atlasSpec) error {
+	chunkSize := spec.gridSize * spec.gridSize
+	sheetPx := spec.tileSize * spec.gridSize
+
 	for start := 0; start < len(media); start += chunkSize {
 		end := start + chunkSize
 		if end > len(media) {
@@ -104,13 +131,14 @@ func regenerateAtlasesForUser(db *gorm.DB, user *models.User) error {
 		}
 		chunk := media[start:end]
 
-		fileName := fmt.Sprintf("atlas-%d-%d.jpg", user.ID, start/chunkSize)
-		if err := writeAtlasSheet(dir, fileName, chunk); err != nil {
+		fileName := fmt.Sprintf("atlas-%d-%d-%d.jpg", user.ID, spec.tileSize, start/chunkSize)
+		if err := writeAtlasSheet(dir, fileName, chunk, spec, sheetPx); err != nil {
 			return fmt.Errorf("writing %s: %w", fileName, err)
 		}
 
 		atlasRow := models.ThumbnailAtlas{
 			UserID:   user.ID,
+			TileSize: spec.tileSize,
 			FileName: fileName,
 		}
 		if err := db.Create(&atlasRow).Error; err != nil {
@@ -123,42 +151,46 @@ func regenerateAtlasesForUser(db *gorm.DB, user *models.User) error {
 				ThumbnailAtlasID: atlasRow.ID,
 				MediaID:          m.MediaID,
 				UserID:           user.ID,
-				X:                i % gridSize,
-				Y:                i / gridSize,
+				X:                i % spec.gridSize,
+				Y:                i / spec.gridSize,
 			})
 		}
 		if err := db.Create(&entries).Error; err != nil {
 			return fmt.Errorf("inserting atlas entries: %w", err)
 		}
 	}
-
-	log.Info(nil, "Generated thumbnail atlases", "user", user.Username, "media", len(media), "sheets", (len(media)+chunkSize-1)/chunkSize)
 	return nil
 }
 
-// writeAtlasSheet composes up to 64 tiny thumbnails into one 1024x1024
-// JPEG. Each thumbnail is center-cropped to a square and scaled to the
-// 128px tile, matching how tiles are displayed in the grid.
-func writeAtlasSheet(dir string, fileName string, chunk []atlasMedia) error {
-	canvas := image.NewRGBA(image.Rect(0, 0, sheetSize, sheetSize))
+// writeAtlasSheet composes thumbnails into a single JPEG sprite sheet.
+// Each thumbnail is center-cropped to a square and scaled to the tile size.
+func writeAtlasSheet(dir string, fileName string, chunk []atlasMedia, spec atlasSpec, sheetPx int) error {
+	canvas := image.NewRGBA(image.Rect(0, 0, sheetPx, sheetPx))
 
 	for i, m := range chunk {
+		// pick the cached thumbnail matching this atlas size
+		cachedName := m.TinyName
+		if spec.tileSize >= models.AtlasTileLarge {
+			cachedName = m.SmallName
+		}
+		if cachedName == "" {
+			continue
+		}
+
 		tile, err := loadSquareTile(filepath.Join(
 			utils.MediaCachePath(),
 			fmt.Sprintf("%d", m.AlbumID),
 			fmt.Sprintf("%d", m.MediaID),
-			m.TinyName,
-		))
+			cachedName,
+		), spec.tileSize)
 		if err != nil {
-			// skip photos whose tiny thumbnail is missing; the frontend
-			// falls back to loading them individually
-			continue
+			continue // skip missing; frontend falls back to individual loading
 		}
 		slot := image.Rect(
-			(i%gridSize)*tileSize,
-			(i/gridSize)*tileSize,
-			(i%gridSize)*tileSize+tileSize,
-			(i/gridSize)*tileSize+tileSize,
+			(i%spec.gridSize)*spec.tileSize,
+			(i/spec.gridSize)*spec.tileSize,
+			(i%spec.gridSize)*spec.tileSize+spec.tileSize,
+			(i/spec.gridSize)*spec.tileSize+spec.tileSize,
 		)
 		draw.Draw(canvas, slot, tile, image.Point{}, draw.Src)
 	}
@@ -172,9 +204,9 @@ func writeAtlasSheet(dir string, fileName string, chunk []atlasMedia) error {
 	return jpeg.Encode(out, canvas, &jpeg.Options{Quality: 75})
 }
 
-// loadSquareTile reads a tiny thumbnail, center-crops it to a square and
-// scales it to the atlas tile size.
-func loadSquareTile(path string) (image.Image, error) {
+// loadSquareTile reads a cached thumbnail, center-crops it to a square
+// and scales it to the atlas tile size.
+func loadSquareTile(path string, tileSize int) (image.Image, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -194,7 +226,6 @@ func loadSquareTile(path string) (image.Image, error) {
 		side = h
 	}
 
-	// center square crop
 	crop := image.Rect(
 		bounds.Min.X+(w-side)/2,
 		bounds.Min.Y+(h-side)/2,

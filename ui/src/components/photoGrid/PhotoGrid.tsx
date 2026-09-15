@@ -183,9 +183,12 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   const levelRef = useRef(zoom.level)
   levelRef.current = zoom.level
 
-  // ---- thumbnail atlas (dense levels) ----
-  // The atlas query needs the tile size (computed by the layout), tracked
-  // as state so the grid re-renders when it first becomes available.
+  // ---- thumbnail atlas (all levels) ----
+  // Two atlas sizes: 128px tiles for dense levels (15/30 columns),
+  // 256px tiles for sparse levels (3/5 columns). Both load a whole
+  // screen in a few requests; the tile size is chosen so the atlas
+  // tile is at least as large as the CSS tile (DPR 1 quality, softer
+  // on high-DPR screens - the user opens the viewer for details).
   const [tileSize, setTileSize] = useState(0)
 
   const onLayoutChange = useCallback((layout: GridLayout) => {
@@ -193,31 +196,20 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     setTileSize(layout.tileSize)
   }, [])
 
-  const dpr =
-    typeof window === 'undefined'
-      ? 1
-      : Math.min(window.devicePixelRatio || 1, 3)
-  // atlases hold 128px tiles; use them whenever the dense level's tiles
-  // need no more than that (30 columns everywhere, 15 columns on most
-  // devices - desktop HiDPI falls back to individual thumbnails)
-  const atlasEnabled = dense && tileSize > 0 && tileSize * dpr <= 128
+  const atlasTileSize = dense ? 128 : 256
 
   const atlasIds = useMemo(
     () =>
-      atlasEnabled
-        ? layoutSections.flatMap(section =>
-            section.items.map(item => item.id)
-          )
-        : [],
-    [atlasEnabled, layoutSections]
+      layoutSections.flatMap(section => section.items.map(item => item.id)),
+    [layoutSections]
   )
 
   const { data: atlasData } = useQuery<
     mediaAtlases,
     mediaAtlasesVariables
   >(MEDIA_ATLASES_QUERY, {
-    variables: { ids: atlasIds },
-    skip: !atlasEnabled || atlasIds.length == 0,
+    variables: { ids: atlasIds, tileSize: atlasTileSize },
+    skip: atlasIds.length == 0 || tileSize == 0,
     fetchPolicy: 'no-cache',
   })
 

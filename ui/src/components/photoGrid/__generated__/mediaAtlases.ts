@@ -40,8 +40,9 @@ export interface mediaAtlases_mediaAtlases {
 export interface mediaAtlases {
   /**
    * Sprite sheets ("atlases") containing the given media, owned by the
-   * logged in user. Dense gallery views load these instead of individual
-   * thumbnails, reducing a full screen of photos to a handful of requests.
+   * logged in user. Dense gallery views (15/30 columns) request 128px
+   * tiles, sparse views (3/5 columns) request 256px tiles - both load a
+   * whole screen of photos in a few requests instead of one per photo.
    * Media that is not part of any atlas (videos, newly added photos) is
    * simply absent from the result and falls back to individual loading.
    */
@@ -50,4 +51,5 @@ export interface mediaAtlases {
 
 export interface mediaAtlasesVariables {
   ids: string[];
+  tileSize?: number | null;
 }
