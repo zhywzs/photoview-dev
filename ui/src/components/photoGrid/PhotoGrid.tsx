@@ -198,6 +198,41 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     spacer.style.height = `${Math.max(1, rowsCount) * pitchForColumns(effWidth, columns, GAP_RATIO)}px`
   }, [effWidth])
 
+  // Idle virtualization: render the committed layer's visible rows (plus a
+  // margin), recomputed from the window scroll. Kept separate from the gesture
+  // logic so scrolling always keeps up (otherwise the un-rendered rows show
+  // the page background as a growing blank area).
+  const updateIdleRows = useCallback(() => {
+    if (pinchingRef.current || settleRef.current) return
+    const host = hostRef.current
+    if (host == null) return
+    const hostTop = host.getBoundingClientRect().top
+    const scrollY = window.scrollY
+    const { columns, wrapOrigin } = srcRef.current
+    const pitch = pitchForColumns(effWidth, columns, GAP_RATIO)
+    const rowMin = rowMinFor(wrapOrigin, columns)
+    const rowMax = rowMaxFor(
+      wrapOrigin,
+      columns,
+      flatItemsRef.current.length
+    )
+    const r0 = Math.max(
+      rowMin,
+      rowMin + Math.floor((scrollY - hostTop) / pitch) - 8
+    )
+    const r1 = Math.min(
+      rowMax,
+      rowMin + Math.ceil((scrollY + vh() - hostTop) / pitch) + 8
+    )
+    const cur = rowsRef.current
+    if (r0 !== cur.s0 || r1 !== cur.s1) {
+      setRows({ s0: r0, s1: r1, t0: cur.t0, t1: cur.t1 })
+    }
+  }, [effWidth])
+
+  const updateIdleRowsRef = useRef(updateIdleRows)
+  updateIdleRowsRef.current = updateIdleRows
+
   const applyLayers = useCallback(() => {
     const host = hostRef.current
     if (host == null) return
@@ -271,22 +306,32 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       return cur
     }
 
-    const sv = rangeFor(srcRef.current, srcPanY)
-    const tv =
-      tgt != null
-        ? rangeFor(tgt, tgtPanY)
-        : ([rowsRef.current.t0, rowsRef.current.t1] as const)
-    const r = rowsRef.current
-    const ns = withMargin(sv, [r.s0, r.s1])
-    const nt = tgt != null ? withMargin(tv, [r.t0, r.t1]) : [r.t0, r.t1]
-    if (ns[0] !== r.s0 || ns[1] !== r.s1 || nt[0] !== r.t0 || nt[1] !== r.t1) {
-      setRows({ s0: ns[0], s1: ns[1], t0: nt[0], t1: nt[1] })
+    // the committed layer's rows are managed by updateIdleRows while idle;
+    // during a gesture extend both layers here
+    if (anchoring) {
+      const sv = rangeFor(srcRef.current, srcPanY)
+      const tv =
+        tgt != null
+          ? rangeFor(tgt, tgtPanY)
+          : ([rowsRef.current.t0, rowsRef.current.t1] as const)
+      const r = rowsRef.current
+      const ns = withMargin(sv, [r.s0, r.s1])
+      const nt = tgt != null ? withMargin(tv, [r.t0, r.t1]) : [r.t0, r.t1]
+      if (
+        ns[0] !== r.s0 ||
+        ns[1] !== r.s1 ||
+        nt[0] !== r.t0 ||
+        nt[1] !== r.t1
+      ) {
+        setRows({ s0: ns[0], s1: ns[1], t0: nt[0], t1: nt[1] })
+      }
     }
 
     // floating date from the topmost visible photo of the committed layer
     const cols = srcRef.current.columns
     const rowMinS = rowMinFor(srcRef.current.wrapOrigin, cols)
-    const topRow = Math.max(rowMinS, sv[0])
+    const pitchS = pitchForColumns(effWidth, cols, GAP_RATIO)
+    const topRow = rowMinS + Math.floor((scrollY - hostTop) / pitchS)
     const topPhoto = Math.max(
       0,
       Math.min(
@@ -369,6 +414,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         window.scrollTo(0, document.documentElement.scrollHeight)
         scrollYRef.current = window.scrollY
         layoutSpacer()
+        updateIdleRowsRef.current()
         applyRef.current()
         kick()
       })
@@ -385,6 +431,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       if (programmaticScrollRef.current) return
       stickBottomRef.current = false
       scrollYRef.current = window.scrollY
+      updateIdleRowsRef.current()
       applyRef.current()
       kick()
     }
@@ -403,6 +450,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       window.requestAnimationFrame(() => {
         programmaticScrollRef.current = false
       })
+      updateIdleRowsRef.current()
       applyRef.current()
       kick()
     }
