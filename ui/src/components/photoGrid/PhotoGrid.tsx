@@ -218,27 +218,53 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     []
   )
 
-  const initialView = useCallback(
+  // ordered index at slot (0,0) of the committed layout; shifts so the photo
+  // under the gesture can be centred (columns grow out of both sides)
+  const originRef = useRef(0)
+  const centerColFor = useCallback(
+    (cols: number) => Math.max(0, Math.round((cols - 1) / 2)),
+    []
+  )
+
+  const anchorAt = useCallback(
+    (clientX: number, clientY: number): number => {
+      const cols = nearestStop(columnsRef.current)
+      const pitch0 = tileForColumns(effWidth, cols) * (1 + GAP_RATIO)
+      const rect = hostRef.current?.getBoundingClientRect()
+      const hostLeft = rect?.left ?? 0
+      const hostTop = rect?.top ?? 0
+      const o = originRef.current
+      const row0 = Math.floor(-o / cols)
+      const row =
+        row0 + Math.floor((window.scrollY + clientY - hostTop) / pitch0)
+      const col = Math.floor((clientX - hostLeft) / pitch0)
+      return o + Math.max(0, row) * cols + col
+    },
+    [effWidth]
+  )
+
+  const settledView = useCallback(
     (tile: number): ContinuousView => ({
       tile,
       fromColumns: columnsRef.current,
       toColumns: null,
-      anchorCX: 0,
-      anchorCY: 0,
+      originFrom: originRef.current,
+      originTo: originRef.current,
+      centerCol: centerColFor(columnsRef.current),
       screenX: 0,
       screenY: -1, // sentinel: no anchor
       scrollY: window.scrollY,
     }),
-    []
+    [centerColFor]
   )
 
   useLayoutEffect(() => {
     if (effWidth <= 0) return
     const tile = tileForColumns(effWidth, columns)
     visualTileRef.current = tile
-    viewFor(initialView(tile))
+    viewFor(settledView(tile))
     setViewVersion(v => v + 1)
-  }, [columns, effWidth, viewFor, initialView])
+  }, [columns, effWidth, viewFor, settledView])
 
   // start at the newest photos: scroll to the bottom of the timeline once
   const didScrollBottomRef = useRef(false)
@@ -258,8 +284,10 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     lastDist: 0,
     fromColumns: 0,
     toColumns: null as number | null,
-    anchorCX: 0,
-    anchorCY: 0,
+    anchorSeq: 0,
+    originFrom: 0,
+    originTo: 0,
+    centerCol: 0,
     screenX: 0,
     screenY: 0,
     scrollY: 0,
@@ -271,75 +299,65 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   const pinchEndAtRef = useRef(0)
 
   const settleAnim = useCallback(
-    (
-      fromColumns: number,
-      toColumns: number,
-      targetIsTo: boolean,
-      anchorCX: number,
-      anchorCY: number,
-      screenY: number,
-      scrollY: number
-    ) => {
+    (targetIsTo: boolean) => {
+      const g = startPinchRef.current
       if (settleRafRef.current != 0) {
         window.cancelAnimationFrame(settleRafRef.current)
         settleRafRef.current = 0
       }
-      const width = effWidth
-      const rect = hostRef.current?.getBoundingClientRect()
-      const hostLeft = rect?.left ?? 0
-      const hostTop = rect?.top ?? 0
+      const commit = targetIsTo && g.toColumns != null
       const from = visualTileRef.current
-      const to = tileForColumns(width, targetIsTo ? toColumns : fromColumns)
-      const pitchTarget = to * (1 + GAP_RATIO)
-      // animate the horizontal anchor offset to zero so the settled grid
-      // fills the width again
-      const screenX0 = startPinchRef.current.screenX
-      const screenX1 = hostLeft + anchorCX * pitchTarget
+      const to = tileForColumns(
+        effWidth,
+        commit ? g.toColumns! : g.fromColumns
+      )
       const t0 = performance.now()
-      let lastY = 0
+      let targetScroll = g.scrollY
       const step = (now: number) => {
         const k = Math.min(1, (now - t0) / SETTLE_MS)
         const eased = 1 - Math.pow(1 - k, 3)
         const tile = from + (to - from) * eased
-        const screenX = screenX0 + (screenX1 - screenX0) * eased
         visualTileRef.current = tile
-        lastY =
+        targetScroll =
           viewFor({
             tile,
-            fromColumns,
-            toColumns,
-            anchorCX,
-            anchorCY,
-            screenX,
-            screenY,
-            scrollY,
-          }) ?? 0
+            fromColumns: g.fromColumns,
+            toColumns: g.toColumns,
+            originFrom: g.originFrom,
+            originTo: g.originTo,
+            centerCol: g.centerCol,
+            screenX: g.screenX,
+            screenY: g.screenY,
+            scrollY: g.scrollY,
+          }) ?? g.scrollY
         if (k < 1) {
           settleRafRef.current = window.requestAnimationFrame(step)
         } else {
           settleRafRef.current = 0
-          const newScroll = scrollY - lastY
-          window.scrollTo(0, newScroll)
-          if (targetIsTo) {
-            zoom.setColumns(toColumns)
-            onColumnsChangeRef.current?.(toColumns)
+          window.scrollTo(0, targetScroll)
+          if (commit) {
+            originRef.current = g.originTo
+            zoom.setColumns(g.toColumns!)
+            onColumnsChangeRef.current?.(g.toColumns!)
           }
           visualTileRef.current = to
+          const finalFrom = commit ? g.toColumns! : g.fromColumns
           viewFor({
             tile: to,
-            fromColumns: targetIsTo ? toColumns : fromColumns,
+            fromColumns: finalFrom,
             toColumns: null,
-            anchorCX: (screenX1 - hostLeft) / pitchTarget,
-            anchorCY: (newScroll + screenY - hostTop) / pitchTarget,
-            screenX: screenX1,
-            screenY,
-            scrollY: newScroll,
+            originFrom: originRef.current,
+            originTo: originRef.current,
+            centerCol: centerColFor(finalFrom),
+            screenX: 0,
+            screenY: -1,
+            scrollY: targetScroll,
           })
         }
       }
       settleRafRef.current = window.requestAnimationFrame(step)
     },
-    [effWidth, viewFor, zoom]
+    [effWidth, viewFor, zoom, centerColFor]
   )
 
   useEffect(() => {
@@ -360,19 +378,20 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         window.cancelAnimationFrame(settleRafRef.current)
         settleRafRef.current = 0
       }
-      const rect = elem.getBoundingClientRect()
       const m = mid(event.touches)
       const g = startPinchRef.current
       const fromColumns = nearestStop(columnsRef.current)
-      const pitch0 = tileForColumns(effWidth, fromColumns) * (1 + GAP_RATIO)
       g.active = true
       g.startDist = dist(event.touches)
       g.lastDist = g.startDist
-      g.startTile = visualTileRef.current || tileForColumns(effWidth, fromColumns)
+      g.startTile =
+        visualTileRef.current || tileForColumns(effWidth, fromColumns)
       g.fromColumns = fromColumns
       g.toColumns = null
-      g.anchorCX = (m.x - rect.left) / pitch0
-      g.anchorCY = (window.scrollY + m.y - rect.top) / pitch0
+      g.anchorSeq = anchorAt(m.x, m.y)
+      g.originFrom = originRef.current
+      g.originTo = originRef.current
+      g.centerCol = centerColFor(fromColumns)
       g.screenX = m.x
       g.screenY = m.y
       g.scrollY = window.scrollY
@@ -399,6 +418,12 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         if (g.toColumns === g.fromColumns) g.toColumns = null
       }
 
+      if (g.toColumns != null) {
+        g.centerCol = centerColFor(g.toColumns)
+        g.originTo = g.anchorSeq - g.centerCol
+        g.originFrom = originRef.current
+      }
+
       let tile = g.startTile * scale
       if (g.toColumns != null) {
         const tFrom = tileForColumns(effWidth, g.fromColumns)
@@ -412,8 +437,9 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         tile,
         fromColumns: g.fromColumns,
         toColumns: g.toColumns,
-        anchorCX: g.anchorCX,
-        anchorCY: g.anchorCY,
+        originFrom: g.originFrom,
+        originTo: g.originTo,
+        centerCol: g.centerCol,
         screenX: g.screenX,
         screenY: g.screenY,
         scrollY: g.scrollY,
@@ -425,16 +451,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       const g = startPinchRef.current
       g.active = false
       if (g.toColumns == null) {
-        // no crossing: just settle back to the committed level
-        settleAnim(
-          g.fromColumns,
-          g.fromColumns,
-          false,
-          g.anchorCX,
-          g.anchorCY,
-          g.screenY,
-          g.scrollY
-        )
+        settleAnim(false)
         return
       }
       const tFrom = tileForColumns(effWidth, g.fromColumns)
@@ -446,16 +463,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
               0,
               Math.min(1, (tFrom - visualTileRef.current) / (tFrom - tTo))
             )
-      const commitTo = prog >= 0.5
-      settleAnim(
-        g.fromColumns,
-        g.toColumns,
-        commitTo,
-        g.anchorCX,
-        g.anchorCY,
-        g.screenY,
-        g.scrollY
-      )
+      settleAnim(prog >= 0.5)
     }
 
     const onTouchEnd = (event: TouchEvent) => {
@@ -499,42 +507,48 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       clientX: number,
       clientY: number
     ) => {
-      const rect = elem.getBoundingClientRect()
       const fromColumns = nearestStop(columnsRef.current)
-      const pitch0 = tileForColumns(effWidth, fromColumns) * (1 + GAP_RATIO)
-      const anchorCX = (clientX - rect.left) / pitch0
-      const anchorCY = (window.scrollY + clientY - rect.top) / pitch0
+      const centerCol = centerColFor(targetColumns)
+      const anchorSeq = anchorAt(clientX, clientY)
+      const originFrom = originRef.current
+      const originTo = anchorSeq - centerCol
+      const g = startPinchRef.current
+      g.anchorSeq = anchorSeq
+      g.originFrom = originFrom
+      g.originTo = originTo
+      g.centerCol = centerCol
+      g.fromColumns = fromColumns
+      g.toColumns = targetColumns
+      g.screenX = clientX
+      g.screenY = clientY
+      g.scrollY = window.scrollY
       const from = visualTileRef.current
       const to = tileForColumns(effWidth, targetColumns)
       const t0 = performance.now()
-      startPinchRef.current.anchorCX = anchorCX
-      startPinchRef.current.anchorCY = anchorCY
-      startPinchRef.current.screenX = clientX
-      startPinchRef.current.screenY = clientY
-      const screenX1 = rect.left + anchorCX * to * (1 + GAP_RATIO)
+      let targetScroll = window.scrollY
       const step = (now: number) => {
         const k = Math.min(1, (now - t0) / SETTLE_MS)
         const eased = 1 - Math.pow(1 - k, 3)
         const tile = from + (to - from) * eased
-        const screenX = clientX + (screenX1 - clientX) * eased
         visualTileRef.current = tile
-        const offsetY =
+        targetScroll =
           viewFor({
             tile,
             fromColumns,
             toColumns: targetColumns,
-            anchorCX,
-            anchorCY,
-            screenX,
+            originFrom,
+            originTo,
+            centerCol,
+            screenX: clientX,
             screenY: clientY,
             scrollY: window.scrollY,
-          }) ?? 0
+          }) ?? window.scrollY
         if (k < 1) {
           settleRafRef.current = window.requestAnimationFrame(step)
         } else {
           settleRafRef.current = 0
-          const newScroll = window.scrollY - offsetY
-          window.scrollTo(0, newScroll)
+          window.scrollTo(0, targetScroll)
+          originRef.current = originTo
           zoom.setColumns(targetColumns)
           onColumnsChangeRef.current?.(targetColumns)
           visualTileRef.current = to
@@ -542,11 +556,12 @@ const PhotoGrid = <T extends MediaGalleryFields>({
             tile: to,
             fromColumns: targetColumns,
             toColumns: null,
-            anchorCX: (screenX1 - rect.left) / (to * (1 + GAP_RATIO)),
-            anchorCY: (newScroll + clientY - rect.top) / (to * (1 + GAP_RATIO)),
-            screenX: screenX1,
-            screenY: clientY,
-            scrollY: newScroll,
+            originFrom: originRef.current,
+            originTo: originRef.current,
+            centerCol: centerColFor(targetColumns),
+            screenX: 0,
+            screenY: -1,
+            scrollY: targetScroll,
           })
         }
       }
@@ -602,11 +617,11 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effWidth, viewFor, stopIndex, settleAnim])
+  }, [effWidth, viewFor, stopIndex, settleAnim, anchorAt, centerColFor])
 
   useEffect(() => {
     if (effWidth <= 0) return
-    viewFor(initialView(visualTileRef.current))
+    viewFor(settledView(visualTileRef.current))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewVersion, columns, effWidth])
 
