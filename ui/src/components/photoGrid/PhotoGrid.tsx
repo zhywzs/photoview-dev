@@ -148,8 +148,6 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   const itemKey = useCallback((media: T) => media.id, [])
 
   const hostRef = useRef<HTMLDivElement | null>(null)
-  const layerSRef = useRef<HTMLDivElement | null>(null)
-  const layerTRef = useRef<HTMLDivElement | null>(null)
   const spacerRef = useRef<HTMLDivElement | null>(null)
   const [width, setWidth] = useState(0)
 
@@ -217,15 +215,32 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   }, [atlasData, atlasMap])
 
   // ---- layers ----
-  const [src, setSrc] = useState<LayerState>(() => ({
-    columns: nearestStop(zoom.columns),
-    wrapOrigin: 0,
-  }))
-  const [tgt, setTgt] = useState<LayerState | null>(null)
-  const srcRef = useRef(src)
-  srcRef.current = src
-  const tgtRef = useRef(tgt)
-  tgtRef.current = tgt
+  // Two layer slots. A zoom transition renders the target in the idle slot and,
+  // when it commits, that slot simply becomes the committed one: the props
+  // (columns/wrapOrigin) and therefore the DOM of the visible photos do not
+  // change at all, so the commit is invisible. The old committed slot is
+  // dropped (it had already faded out).
+  const [slots, setSlots] = useState<[LayerState | null, LayerState | null]>(
+    () => [{ columns: nearestStop(zoom.columns), wrapOrigin: 0 }, null]
+  )
+  const [front, setFront] = useState<0 | 1>(0)
+  const slotsRef = useRef(slots)
+  slotsRef.current = slots
+  const frontRef = useRef<0 | 1>(front)
+  frontRef.current = front
+
+  const srcLayer: LayerState =
+    slots[front] ?? ({ columns: nearestStop(zoom.columns), wrapOrigin: 0 })
+  const tgtSlot: 0 | 1 = front === 0 ? 1 : 0
+  const tgtLayer = slots[tgtSlot]
+
+  const srcRef = useRef(srcLayer)
+  srcRef.current = srcLayer
+  const tgtRef = useRef<LayerState | null>(tgtLayer)
+  tgtRef.current = tgtLayer
+
+  const layer0Ref = useRef<HTMLDivElement | null>(null)
+  const layer1Ref = useRef<HTMLDivElement | null>(null)
 
   // rendered row window per layer (virtualization); kept in state so the DOM
   // only ever holds the visible rows (+ a small margin)
@@ -288,6 +303,9 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     // layers are drawn naturally and the window scroll does the moving
     const anchoring = pinchingRef.current || settleRef.current
 
+    const frontI = frontRef.current
+    const slotList = slotsRef.current
+
     const setLayer = (
       layer: LayerState,
       el: HTMLDivElement | null
@@ -310,16 +328,20 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       return panY
     }
 
-    const srcPanY = setLayer(srcRef.current, layerSRef.current)
-    const tgtPanY = tgt != null ? setLayer(tgt, layerTRef.current) : 0
-    if (layerSRef.current != null) {
-      layerSRef.current.style.opacity = tgt != null ? `${1 - fade}` : '1'
-      layerSRef.current.style.pointerEvents =
-        tgt != null && fade > 0.5 ? 'none' : 'auto'
-    }
-    if (layerTRef.current != null && tgt != null) {
-      layerTRef.current.style.opacity = `${fade}`
-      layerTRef.current.style.pointerEvents = fade <= 0.5 ? 'none' : 'auto'
+    const hasTarget = slotList[1 - frontI] != null
+    const panYs: number[] = [0, 0]
+    for (let i = 0; i < 2; i++) {
+      const layer = slotList[i]
+      const el = i === 0 ? layer0Ref.current : layer1Ref.current
+      if (layer == null || el == null) continue
+      panYs[i] = setLayer(layer, el)
+      if (i === frontI) {
+        el.style.opacity = hasTarget ? `${1 - fade}` : '1'
+        el.style.pointerEvents = hasTarget && fade > 0.5 ? 'none' : 'auto'
+      } else {
+        el.style.opacity = `${fade}`
+        el.style.pointerEvents = fade <= 0.5 ? 'none' : 'auto'
+      }
     }
 
     // Virtualization: the rows of a layer that intersect the viewport. A row's
@@ -352,8 +374,13 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     }
 
     const cur = rowsRef.current
-    const sv = rangeFor(srcRef.current, srcPanY)
-    const tv = tgt != null ? rangeFor(tgt, tgtPanY) : null
+    const srcNow = slotList[frontI]
+    const tgtNow = slotList[1 - frontI]
+    const sv =
+      srcNow != null
+        ? rangeFor(srcNow, panYs[frontI])
+        : ([cur.s0, cur.s1] as const)
+    const tv = tgtNow != null ? rangeFor(tgtNow, panYs[1 - frontI]) : null
     const ns0 = sv[0]
     const ns1 = sv[1]
     const nt0 = tv != null ? tv[0] : cur.t0
@@ -368,15 +395,16 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     }
 
     // floating date from the topmost visible photo of the committed layer
-    const cols = srcRef.current.columns
-    const rowMinS = rowMinFor(srcRef.current.wrapOrigin, cols)
+    const cols = srcNow != null ? srcNow.columns : cur.s1
+    const srcWrap = srcNow != null ? srcNow.wrapOrigin : 0
+    const rowMinS = rowMinFor(srcWrap, cols)
     const pitchS = pitchForColumns(effWidth, cols, GAP_RATIO)
     const topRow = rowMinS + Math.floor(-hostTop / pitchS)
     const topPhoto = Math.max(
       0,
       Math.min(
         flatItemsRef.current.length - 1,
-        srcRef.current.wrapOrigin + topRow * cols
+        srcWrap + topRow * cols
       )
     )
     const flatTop = flatItemsRef.current.length - 1 - topPhoto
@@ -386,8 +414,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       floatingRef.current = title
       setFloatingDate(title)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effWidth, tgt])
+  }, [effWidth])
 
   const applyRef = useRef(applyLayers)
   applyRef.current = applyLayers
@@ -398,7 +425,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   // on-screen result is identical, so there is nothing to see.
   useLayoutEffect(() => {
     applyRef.current()
-  }, [src, tgt])
+  }, [slots, front])
 
   // ---- animation loop ----
   const rafRef = useRef(0)
@@ -535,23 +562,44 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         0,
         Math.min(target - 1, Math.round(rel * target - 0.5))
       )
-      const wrap = anchorPhotoRef.current - col
+      const layer: LayerState = {
+        columns: target,
+        wrapOrigin: anchorPhotoRef.current - col,
+      }
+      const ti: 0 | 1 = frontRef.current === 0 ? 1 : 0
+      const next = slotsRef.current.slice() as [
+        LayerState | null,
+        LayerState | null
+      ]
+      next[ti] = layer
+      slotsRef.current = next
+      tgtRef.current = layer
       fadeRef.current = 0
       fadeTargetRef.current = 0
-      setTgt({ columns: target, wrapOrigin: wrap })
+      setSlots(next)
     },
     [effWidth]
   )
 
-  const commitLayer = useCallback(
-    (layer: LayerState) => {
+  const commitLayer = useCallback((commit: boolean, layer: LayerState) => {
+    const frontI = frontRef.current
+    const idleI: 0 | 1 = frontI === 0 ? 1 : 0
+    const next: [LayerState | null, LayerState | null] = [null, null]
+    if (commit) {
+      // the target lives in the idle slot: make that slot the committed one so
+      // its DOM (and therefore the visible photos) is not re-created
+      next[idleI] = layer
+      frontRef.current = idleI
       srcRef.current = layer
-      setSrc(layer)
-      tgtRef.current = null
-      setTgt(null)
-    },
-    []
-  )
+      setFront(idleI)
+    } else {
+      // cancelled: keep the committed slot's DOM, drop the target
+      next[frontI] = layer
+    }
+    slotsRef.current = next
+    tgtRef.current = null
+    setSlots(next)
+  }, [])
 
   const settleTo = useCallback(
     (commit: boolean) => {
@@ -593,7 +641,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         // fold the anchor offset into the scroll in one step (visually
         // identical) - the content does not move at all
         const layer = commit ? tgtLayer : srcRef.current
-        commitLayer(layer)
+        commitLayer(commit, layer)
         visualTileRef.current = tileForColumns(
           effWidth,
           layer.columns,
@@ -656,8 +704,18 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         srcRef.current.columns,
         GAP_RATIO
       )
+      // drop any leftover target layer (the idle slot)
+      const ti: 0 | 1 = frontRef.current === 0 ? 1 : 0
+      if (slotsRef.current[ti] != null) {
+        const next = slotsRef.current.slice() as [
+          LayerState | null,
+          LayerState | null
+        ]
+        next[ti] = null
+        slotsRef.current = next
+        setSlots(next)
+      }
       tgtRef.current = null
-      setTgt(null)
       fadeRef.current = 0
       fadeTargetRef.current = 0
       const m = mid(event.touches)
@@ -829,8 +887,8 @@ const PhotoGrid = <T extends MediaGalleryFields>({
 
   // report the settled column count so the parent can re-group dates
   useEffect(() => {
-    onColumnsChangeRef.current?.(src.columns)
-  }, [src.columns])
+    onColumnsChangeRef.current?.(srcLayer.columns)
+  }, [srcLayer.columns])
 
   // stable tile callbacks so memoized tiles are not invalidated each render
   const onActivateRef = useRef(onItemActivate)
@@ -870,26 +928,30 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       <div ref={spacerRef} style={{ width: '100%' }} />
       {effWidth > 0 && (
         <>
-          <ZoomLayer
-            items={seq}
-            columns={src.columns}
-            wrapOrigin={src.wrapOrigin}
-            width={effWidth}
-            r0={rows.s0}
-            r1={rows.s1}
-            renderItem={renderItem}
-            layerRef={layerSRef}
-          />
-          {tgt != null && (
+          {slots[0] != null && (
             <ZoomLayer
+              key="slot0"
               items={seq}
-              columns={tgt.columns}
-              wrapOrigin={tgt.wrapOrigin}
+              columns={slots[0].columns}
+              wrapOrigin={slots[0].wrapOrigin}
               width={effWidth}
-              r0={rows.t0}
-              r1={rows.t1}
+              r0={front === 0 ? rows.s0 : rows.t0}
+              r1={front === 0 ? rows.s1 : rows.t1}
               renderItem={renderItem}
-              layerRef={layerTRef}
+              layerRef={layer0Ref}
+            />
+          )}
+          {slots[1] != null && (
+            <ZoomLayer
+              key="slot1"
+              items={seq}
+              columns={slots[1].columns}
+              wrapOrigin={slots[1].wrapOrigin}
+              width={effWidth}
+              r0={front === 1 ? rows.s0 : rows.t0}
+              r1={front === 1 ? rows.s1 : rows.t1}
+              renderItem={renderItem}
+              layerRef={layer1Ref}
             />
           )}
         </>
