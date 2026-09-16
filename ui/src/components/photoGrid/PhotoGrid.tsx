@@ -209,12 +209,16 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     const scrollY = scrollYRef.current
     const P = visualTile * (1 + GAP_RATIO)
     const vhpx = vh()
+    // only anchor (pin the finger's photo) during a gesture; when idle the
+    // layers are drawn naturally and the window scroll does the moving
+    const anchoring = pinchingRef.current || settleRef.current
 
-    const place = (
-      layer: LayerState,
-      el: HTMLDivElement | null
-    ): number => {
+    const setLayer = (layer: LayerState, el: HTMLDivElement | null): number => {
       if (el == null) return 0
+      if (!anchoring) {
+        el.style.transform = 'none'
+        return 0
+      }
       const { columns, wrapOrigin } = layer
       const s = visualTile / tileForColumns(effWidth, columns, GAP_RATIO)
       const rowMin = rowMinFor(wrapOrigin, columns)
@@ -223,15 +227,13 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         ((((anchorPhotoRef.current - wrapOrigin) % columns) + columns) %
           columns)
       const panX = fingerXRef.current - hostLeft - pCol * P
-      const panY =
-        fingerYRef.current - hostTop + scrollY - (pRow - rowMin) * P
+      const panY = fingerYRef.current - hostTop + scrollY - (pRow - rowMin) * P
       el.style.transform = `translate(${panX}px, ${panY}px) scale(${s})`
       return panY
     }
 
-    const srcPanY = place(srcRef.current, layerSRef.current)
-    const tgtPanY = tgt != null ? place(tgt, layerTRef.current) : 0
-
+    const srcPanY = setLayer(srcRef.current, layerSRef.current)
+    const tgtPanY = tgt != null ? setLayer(tgt, layerTRef.current) : 0
     if (layerSRef.current != null) {
       layerSRef.current.style.opacity = tgt != null ? `${1 - fade}` : '1'
     }
@@ -239,40 +241,54 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       layerTRef.current.style.opacity = `${fade}`
     }
 
-    // extend the rendered row ranges to cover the (possibly scaled) viewport
     const rangeFor = (layer: LayerState, panY: number) => {
       const { columns, wrapOrigin } = layer
       const pitch = pitchForColumns(effWidth, columns, GAP_RATIO)
       const rowMin = rowMinFor(wrapOrigin, columns)
-      const s = visualTile / tileForColumns(effWidth, columns, GAP_RATIO)
+      const s = anchoring
+        ? visualTile / tileForColumns(effWidth, columns, GAP_RATIO)
+        : 1
       const localTop = (scrollY - hostTop - panY) / s
       const localBottom = (scrollY + vhpx - hostTop - panY) / s
       return [
-        rowMin + Math.floor(localTop / pitch) - ROW_MARGIN,
-        rowMin + Math.ceil(localBottom / pitch) + ROW_MARGIN,
+        rowMin + Math.floor(localTop / pitch),
+        rowMin + Math.ceil(localBottom / pitch),
       ] as const
     }
-    const [s0, s1] = rangeFor(srcRef.current, srcPanY)
-    const [t0, t1] =
+    const withMargin = (
+      range: readonly [number, number],
+      cur: readonly [number, number]
+    ): readonly [number, number] => {
+      if (
+        range[0] < cur[0] + ROW_MARGIN ||
+        range[1] > cur[1] - ROW_MARGIN
+      ) {
+        return [range[0] - ROW_MARGIN, range[1] + ROW_MARGIN]
+      }
+      return cur
+    }
+
+    const sv = rangeFor(srcRef.current, srcPanY)
+    const tv =
       tgt != null
         ? rangeFor(tgt, tgtPanY)
         : ([rowsRef.current.t0, rowsRef.current.t1] as const)
     const r = rowsRef.current
-    if (s0 < r.s0 || s1 > r.s1 || t0 < r.t0 || t1 > r.t1) {
-      setRows({
-        s0: Math.min(r.s0, s0),
-        s1: Math.max(r.s1, s1),
-        t0: Math.min(r.t0, t0),
-        t1: Math.max(r.t1, t1),
-      })
+    const ns = withMargin(sv, [r.s0, r.s1])
+    const nt = tgt != null ? withMargin(tv, [r.t0, r.t1]) : [r.t0, r.t1]
+    if (ns[0] !== r.s0 || ns[1] !== r.s1 || nt[0] !== r.t0 || nt[1] !== r.t1) {
+      setRows({ s0: ns[0], s1: ns[1], t0: nt[0], t1: nt[1] })
     }
 
     // floating date from the topmost visible photo of the committed layer
+    const cols = srcRef.current.columns
+    const rowMinS = rowMinFor(srcRef.current.wrapOrigin, cols)
+    const topRow = Math.max(rowMinS, sv[0])
     const topPhoto = Math.max(
       0,
       Math.min(
         flatItemsRef.current.length - 1,
-        srcRef.current.wrapOrigin + Math.max(s0, rowMinFor(srcRef.current.wrapOrigin, srcRef.current.columns)) * srcRef.current.columns
+        srcRef.current.wrapOrigin + topRow * cols
       )
     )
     const flatTop = flatItemsRef.current.length - 1 - topPhoto
@@ -717,18 +733,26 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   }, [src.columns])
 
   const renderItem = useCallback(
-    (media: T, absoluteIndex: number, baseSize: number) => (
-      <PhotoTile
-        media={media}
-        tileSize={baseSize}
-        atlas={atlasMap.get(media.id)}
-        active={activeId != null && media.id == activeId}
-        onClick={() => onItemActivate(media, absoluteIndex)}
-        onFavorite={
-          onItemFavorite ? () => onItemFavorite(media, absoluteIndex) : undefined
-        }
-      />
-    ),
+    (media: T, sequenceIndex: number, baseSize: number) => {
+      // the owner keeps its media in newest-first order, but the grid renders
+      // oldest-first; convert so tapping opens the right photo
+      const flatIndex =
+        flatItemsRef.current.length - 1 - sequenceIndex
+      return (
+        <PhotoTile
+          media={media}
+          tileSize={baseSize}
+          atlas={atlasMap.get(media.id)}
+          active={activeId != null && media.id == activeId}
+          onClick={() => onItemActivate(media, flatIndex)}
+          onFavorite={
+            onItemFavorite
+              ? () => onItemFavorite(media, flatIndex)
+              : undefined
+          }
+        />
+      )
+    },
     [atlasMap, activeId, onItemActivate, onItemFavorite]
   )
 
