@@ -240,15 +240,37 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     setViewVersion(v => v + 1)
   }, [columns, effWidth, viewFor, initialView])
 
-  // start at the newest photos: scroll to the bottom of the timeline once
-  const didScrollBottomRef = useRef(false)
+  // Start at the newest photos (bottom). Keep sticking to the bottom while
+  // the content is still settling (data load, layout, …) until the user
+  // actually scrolls, otherwise those re-layouts drag the view up to an
+  // early date.
+  const stickBottomRef = useRef(true)
+  const programmaticScrollRef = useRef(false)
   useEffect(() => {
-    if (didScrollBottomRef.current) return
-    if (flatItems.length == 0 || effWidth <= 0) return
-    didScrollBottomRef.current = true
-    window.requestAnimationFrame(() => {
+    const onScroll = () => {
+      if (programmaticScrollRef.current) return
+      stickBottomRef.current = false
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+
+  useEffect(() => {
+    const host = hostRef.current
+    if (host == null) return
+    const stick = () => {
+      if (!stickBottomRef.current) return
+      programmaticScrollRef.current = true
       window.scrollTo(0, document.documentElement.scrollHeight)
-    })
+      window.requestAnimationFrame(() => {
+        programmaticScrollRef.current = false
+      })
+    }
+    stick()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(stick)
+    observer.observe(host)
+    return () => observer.disconnect()
   }, [flatItems.length, effWidth])
 
   const startPinchRef = useRef({

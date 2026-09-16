@@ -3,6 +3,7 @@ import React, {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   useState,
 } from 'react'
 import { useQuery, gql } from '@apollo/client'
@@ -214,7 +215,14 @@ const TimelineGallery = ({ forceFavorites = false }: TimelineGalleryProps) => {
     })
   }, [data])
 
+  const didInitDateFilterRef = useRef(false)
   useEffect(() => {
+    // skip the initial mount: the first query already ran, and resetStore
+    // here would clear the cache and drag the view away from the newest
+    if (!didInitDateFilterRef.current) {
+      didInitDateFilterRef.current = true
+      return
+    }
     ;(async () => {
       await client.resetStore()
       await refetch({
@@ -225,6 +233,7 @@ const TimelineGallery = ({ forceFavorites = false }: TimelineGalleryProps) => {
         limit: 200,
       })
     })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromDate, toDate])
 
   urlPresentModeSetupHook({
