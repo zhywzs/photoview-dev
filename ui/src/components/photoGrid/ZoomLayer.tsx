@@ -33,12 +33,40 @@ export function rowMaxFor(
   return Math.floor((Math.max(1, count) - 1 - wrapOrigin) / Math.max(1, columns))
 }
 
+/**
+ * Rows of a layer that intersect the viewport, for the virtualization window.
+ *
+ * A row `r` sits at on-screen y = `hostTop + panY + scale*(r-rowMin)*pitch`
+ * (the layer is absolutely positioned at the host's top and then transformed),
+ * so solving `y in [0, viewportHeight]` gives the visible rows.
+ */
+export function layerVisibleRows(
+  hostTop: number,
+  panY: number,
+  scale: number,
+  pitch: number,
+  rowMin: number,
+  rowMax: number,
+  viewportHeight: number,
+  margin = 2
+): readonly [number, number] {
+  const s = scale > 0 ? scale : 1
+  const top = (-hostTop - panY) / (s * pitch)
+  const bottom = (viewportHeight - hostTop - panY) / (s * pitch)
+  const r0 = Math.max(rowMin, rowMin + Math.floor(top) - margin)
+  const r1 = Math.min(rowMax, rowMin + Math.ceil(bottom) + margin)
+  return [r0, r1] as const
+}
+
 export type ZoomLayerProps<T> = {
   items: T[]
   columns: number
   /** ordered index placed at slot (0,0) */
   wrapOrigin: number
   width: number
+  /** first/last row to render (virtualization window) */
+  r0: number
+  r1: number
   gapRatio?: number
   renderItem(item: T, index: number, tileSize: number): React.ReactNode
   layerRef?: React.MutableRefObject<HTMLDivElement | null>
@@ -48,17 +76,15 @@ export type ZoomLayerProps<T> = {
  * One zoom layer: a grid of photos for a (columns, wrap origin) layout, laid
  * out in the layer's own coordinates (tile (r,c) at
  * `(c*pitch, (r-rowMin)*pitch)`). The owner moves/scales the whole layer with a
- * single transform.
- *
- * Every row is rendered; off-screen rows are skipped by the browser thanks to
- * `content-visibility: auto`, so the grid is never missing a row (no blank
- * areas) while still staying cheap to scroll.
+ * single transform and decides which rows exist via the `r0..r1` window.
  */
 const ZoomLayer = <T,>({
   items,
   columns,
   wrapOrigin,
   width,
+  r0,
+  r1,
   gapRatio = GAP_RATIO,
   renderItem,
   layerRef,
@@ -69,8 +95,11 @@ const ZoomLayer = <T,>({
   const rowMax = rowMaxFor(wrapOrigin, columns, items.length)
   const count = items.length
 
+  const first = Math.max(rowMin, r0)
+  const last = Math.min(rowMax, r1)
+
   const rows: React.ReactNode[] = []
-  for (let r = rowMin; r <= rowMax; r++) {
+  for (let r = first; r <= last; r++) {
     const cells: React.ReactNode[] = []
     for (let c = 0; c < columns; c++) {
       const index = wrapOrigin + r * columns + c
@@ -99,8 +128,7 @@ const ZoomLayer = <T,>({
           right: 0,
           top: (r - rowMin) * pitch,
           height: tile,
-          contentVisibility: 'auto',
-        } as React.CSSProperties}
+        }}
       >
         {cells}
       </div>

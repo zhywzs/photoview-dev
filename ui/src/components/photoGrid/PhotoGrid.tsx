@@ -13,15 +13,16 @@ import ZoomLayer, {
   rowMaxFor,
   rowMinFor,
   tileForColumns,
+  layerVisibleRows,
 } from './ZoomLayer'
 import PhotoTile from './PhotoTile'
 import { GridSectionData, flattenSections, groupForIndex } from './gridLayout'
 import { COLUMN_STOPS, nearestStop, useGridZoom } from './gridZoom'
 import { MediaGalleryFields } from '../photoGallery/__generated__/MediaGalleryFields'
 import {
+  AtlasTile,
   AtlasTileMap,
   MEDIA_ATLASES_QUERY,
-  buildAtlasMap,
   mediaAtlases,
   mediaAtlasesVariables,
 } from './atlas'
@@ -33,8 +34,48 @@ const IDLE_MS = 110
 const FADE_START = 0.6
 const FADE_MS = 500
 const ATLAS_TILE_SIZE = 256
+const ROW_MARGIN = 2
 
 type LayerState = { columns: number; wrapOrigin: number }
+
+type GridTileProps = {
+  media: MediaGalleryFields
+  tileSize: number
+  atlas?: AtlasTile
+  active: boolean
+  canFavorite: boolean
+  index: number
+  onActivate(media: MediaGalleryFields, index: number): void
+  onFavorite(media: MediaGalleryFields, index: number): void
+}
+
+/**
+ * Memoized tile wrapper. Zooming re-renders the grid's row window (the window
+ * shifts as the layout scales), so the tiles must bail out of re-rendering
+ * unless their own content changed - otherwise every gesture frame would cost
+ * a few hundred tile renders.
+ */
+const GridTile = React.memo(function GridTile({
+  media,
+  tileSize,
+  atlas,
+  active,
+  canFavorite,
+  index,
+  onActivate,
+  onFavorite,
+}: GridTileProps) {
+  return (
+    <PhotoTile
+      media={media}
+      tileSize={tileSize}
+      atlas={atlas}
+      active={active}
+      onClick={() => onActivate(media, index)}
+      onFavorite={canFavorite ? () => onFavorite(media, index) : undefined}
+    />
+  )
+})
 
 type PhotoGridProps<T extends MediaGalleryFields> = {
   sections?: GridSectionData<T>[]
@@ -132,18 +173,48 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   // ---- atlas (single 256px size; the source never changes with zoom) ----
   const atlasIds = useMemo(() => flatItems.map(itemKey), [flatItems, itemKey])
 
+  // Atlases are accumulated rather than replaced: requesting only the ids we
+  // do not have yet (the timeline paginates) and keeping the already-resolved
+  // AtlasTile objects identical means the memoized tiles that were already
+  // showing an image do not re-render when another page loads.
+  const atlasMap = useRef<AtlasTileMap>(new Map()).current
+  const knownAtlasIds = useRef<Set<string>>(new Set())
+  const [, setAtlasVersion] = useState(0)
+
+  const pendingAtlasIds = useMemo(
+    () => atlasIds.filter(id => !knownAtlasIds.current.has(id)),
+    [atlasIds]
+  )
+
   const { data: atlasData } = useQuery<mediaAtlases, mediaAtlasesVariables>(
     MEDIA_ATLASES_QUERY,
     {
-      variables: { ids: atlasIds, tileSize: ATLAS_TILE_SIZE },
-      skip: atlasIds.length == 0,
+      variables: { ids: pendingAtlasIds, tileSize: ATLAS_TILE_SIZE },
+      skip: pendingAtlasIds.length == 0,
       fetchPolicy: 'no-cache',
     }
   )
-  const atlasMap: AtlasTileMap = useMemo(
-    () => buildAtlasMap(atlasData),
-    [atlasData]
-  )
+
+  useEffect(() => {
+    if (atlasData == null) return
+    let added = false
+    for (const atlas of atlasData.mediaAtlases) {
+      for (const entry of atlas.entries) {
+        knownAtlasIds.current.add(entry.mediaId)
+        if (!atlasMap.has(entry.mediaId)) {
+          atlasMap.set(entry.mediaId, {
+            url: atlas.url,
+            x: entry.x,
+            y: entry.y,
+            tileSize: atlas.tileSize,
+            gridSize: atlas.gridSize,
+          })
+          added = true
+        }
+      }
+    }
+    if (added) setAtlasVersion(v => v + 1)
+  }, [atlasData, atlasMap])
 
   // ---- layers ----
   const [src, setSrc] = useState<LayerState>(() => ({
@@ -155,6 +226,12 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   srcRef.current = src
   const tgtRef = useRef(tgt)
   tgtRef.current = tgt
+
+  // rendered row window per layer (virtualization); kept in state so the DOM
+  // only ever holds the visible rows (+ a small margin)
+  const [rows, setRows] = useState({ s0: 0, s1: 4, t0: 0, t1: 0 })
+  const rowsRef = useRef(rows)
+  rowsRef.current = rows
 
   const [floatingDate, setFloatingDate] = useState<string | null>(null)
   const floatingRef = useRef<string | null>(null)
@@ -197,21 +274,28 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     const host = hostRef.current
     if (host == null) return
     const rect = host.getBoundingClientRect()
+    // NOTE: rect.top/left are viewport coordinates and already account for the
+    // window scroll. The validated prototype draws on a fixed (viewport) canvas,
+    // so its math maps 1:1 once hostTop/hostLeft are used this way (adding
+    // scrollY anywhere here would be wrong).
     const hostTop = rect.top
     const hostLeft = rect.left
     const visualTile = visualTileRef.current
     const fade = fadeRef.current
-    const scrollY = scrollYRef.current
     const P = visualTile * (1 + GAP_RATIO)
+    const vhpx = vh()
     // only anchor (pin the finger's photo) during a gesture; when idle the
     // layers are drawn naturally and the window scroll does the moving
     const anchoring = pinchingRef.current || settleRef.current
 
-    const setLayer = (layer: LayerState, el: HTMLDivElement | null) => {
-      if (el == null) return
+    const setLayer = (
+      layer: LayerState,
+      el: HTMLDivElement | null
+    ): number => {
+      if (el == null) return 0
       if (!anchoring) {
         el.style.transform = 'none'
-        return
+        return 0
       }
       const { columns, wrapOrigin } = layer
       const s = visualTile / tileForColumns(effWidth, columns, GAP_RATIO)
@@ -221,12 +305,13 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         ((((anchorPhotoRef.current - wrapOrigin) % columns) + columns) %
           columns)
       const panX = fingerXRef.current - hostLeft - pCol * P
-      const panY = fingerYRef.current - hostTop + scrollY - (pRow - rowMin) * P
+      const panY = fingerYRef.current - hostTop - (pRow - rowMin) * P
       el.style.transform = `translate(${panX}px, ${panY}px) scale(${s})`
+      return panY
     }
 
-    setLayer(srcRef.current, layerSRef.current)
-    if (tgt != null) setLayer(tgt, layerTRef.current)
+    const srcPanY = setLayer(srcRef.current, layerSRef.current)
+    const tgtPanY = tgt != null ? setLayer(tgt, layerTRef.current) : 0
     if (layerSRef.current != null) {
       layerSRef.current.style.opacity = tgt != null ? `${1 - fade}` : '1'
       layerSRef.current.style.pointerEvents =
@@ -237,11 +322,56 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       layerTRef.current.style.pointerEvents = fade <= 0.5 ? 'none' : 'auto'
     }
 
+    // Virtualization: the rows of a layer that intersect the viewport. A row's
+    // on-screen y is `hostTop + panY + s*rowOffset`, so solve that for 0..vhpx.
+    const rangeFor = (
+      layer: LayerState,
+      panY: number
+    ): readonly [number, number] => {
+      const { columns, wrapOrigin } = layer
+      const pitch = pitchForColumns(effWidth, columns, GAP_RATIO)
+      const rowMin = rowMinFor(wrapOrigin, columns)
+      const rowMax = rowMaxFor(
+        wrapOrigin,
+        columns,
+        flatItemsRef.current.length
+      )
+      const s = anchoring
+        ? visualTile / tileForColumns(effWidth, columns, GAP_RATIO)
+        : 1
+      return layerVisibleRows(
+        hostTop,
+        panY,
+        s,
+        pitch,
+        rowMin,
+        rowMax,
+        vhpx,
+        ROW_MARGIN
+      )
+    }
+
+    const cur = rowsRef.current
+    const sv = rangeFor(srcRef.current, srcPanY)
+    const tv = tgt != null ? rangeFor(tgt, tgtPanY) : null
+    const ns0 = sv[0]
+    const ns1 = sv[1]
+    const nt0 = tv != null ? tv[0] : cur.t0
+    const nt1 = tv != null ? tv[1] : cur.t1
+    if (
+      ns0 !== cur.s0 ||
+      ns1 !== cur.s1 ||
+      nt0 !== cur.t0 ||
+      nt1 !== cur.t1
+    ) {
+      setRows({ s0: ns0, s1: ns1, t0: nt0, t1: nt1 })
+    }
+
     // floating date from the topmost visible photo of the committed layer
     const cols = srcRef.current.columns
     const rowMinS = rowMinFor(srcRef.current.wrapOrigin, cols)
     const pitchS = pitchForColumns(effWidth, cols, GAP_RATIO)
-    const topRow = rowMinS + Math.floor((scrollY - hostTop) / pitchS)
+    const topRow = rowMinS + Math.floor(-hostTop / pitchS)
     const topPhoto = Math.max(
       0,
       Math.min(
@@ -261,6 +391,14 @@ const PhotoGrid = <T extends MediaGalleryFields>({
 
   const applyRef = useRef(applyLayers)
   applyRef.current = applyLayers
+
+  // When the layer layout changes (a zoom commits, or a transition starts) the
+  // DOM is re-rendered with the new layout; apply the imperative transforms in
+  // the same pre-paint frame. This is what makes the commit invisible: the
+  // on-screen result is identical, so there is nothing to see.
+  useLayoutEffect(() => {
+    applyRef.current()
+  }, [src, tgt])
 
   // ---- animation loop ----
   const rafRef = useRef(0)
@@ -379,8 +517,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       const { columns, wrapOrigin } = srcRef.current
       const pitch = pitchForColumns(effWidth, columns, GAP_RATIO)
       const rowMin = rowMinFor(wrapOrigin, columns)
-      const r =
-        rowMin + Math.floor((fy + scrollYRef.current - hostTop) / pitch)
+      const r = rowMin + Math.floor((fy - hostTop) / pitch)
       const c = Math.floor((fx - hostLeft) / pitch)
       anchorPhotoRef.current = Math.max(
         0,
@@ -472,10 +609,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
           (anchorPhotoRef.current - layer.wrapOrigin) / layer.columns
         )
         const panY =
-          fingerYRef.current +
-          scrollYRef.current -
-          hostTop -
-          (pRow - rowMin) * pitch
+          fingerYRef.current - hostTop - (pRow - rowMin) * pitch
         layoutSpacer()
         const maxScroll = Math.max(
           0,
@@ -487,7 +621,11 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         )
         window.scrollTo(0, newScroll)
         scrollYRef.current = window.scrollY
-        applyRef.current()
+        // Do NOT touch the layers here: React has not re-rendered the committed
+        // layer to `layer` yet, and the target layer (still visible, transform
+        // is viewport-pinned so the scroll fold does not move it) is exactly
+        // what should stay on screen. The layout effect below swaps to the
+        // committed layer before the next paint, so the commit is invisible.
         settleRef.current = false
         kick()
       }
@@ -694,28 +832,37 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     onColumnsChangeRef.current?.(src.columns)
   }, [src.columns])
 
+  // stable tile callbacks so memoized tiles are not invalidated each render
+  const onActivateRef = useRef(onItemActivate)
+  onActivateRef.current = onItemActivate
+  const onFavoriteRef = useRef(onItemFavorite)
+  onFavoriteRef.current = onItemFavorite
+  const activate = useCallback((media: MediaGalleryFields, index: number) => {
+    onActivateRef.current(media as T, index)
+  }, [])
+  const favorite = useCallback((media: MediaGalleryFields, index: number) => {
+    onFavoriteRef.current?.(media as T, index)
+  }, [])
+
   const renderItem = useCallback(
     (media: T, sequenceIndex: number, baseSize: number) => {
       // the owner keeps its media in newest-first order, but the grid renders
       // oldest-first; convert so tapping opens the right photo
-      const flatIndex =
-        flatItemsRef.current.length - 1 - sequenceIndex
+      const flatIndex = flatItemsRef.current.length - 1 - sequenceIndex
       return (
-        <PhotoTile
+        <GridTile
           media={media}
           tileSize={baseSize}
           atlas={atlasMap.get(media.id)}
           active={activeId != null && media.id == activeId}
-          onClick={() => onItemActivate(media, flatIndex)}
-          onFavorite={
-            onItemFavorite
-              ? () => onItemFavorite(media, flatIndex)
-              : undefined
-          }
+          canFavorite={onItemFavorite != null}
+          index={flatIndex}
+          onActivate={activate}
+          onFavorite={favorite}
         />
       )
     },
-    [atlasMap, activeId, onItemActivate, onItemFavorite]
+    [atlasMap, activeId, onItemFavorite, activate, favorite]
   )
 
   return (
@@ -728,6 +875,8 @@ const PhotoGrid = <T extends MediaGalleryFields>({
             columns={src.columns}
             wrapOrigin={src.wrapOrigin}
             width={effWidth}
+            r0={rows.s0}
+            r1={rows.s1}
             renderItem={renderItem}
             layerRef={layerSRef}
           />
@@ -737,6 +886,8 @@ const PhotoGrid = <T extends MediaGalleryFields>({
               columns={tgt.columns}
               wrapOrigin={tgt.wrapOrigin}
               width={effWidth}
+              r0={rows.t0}
+              r1={rows.t1}
               renderItem={renderItem}
               layerRef={layerTRef}
             />
