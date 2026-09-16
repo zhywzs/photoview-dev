@@ -40,18 +40,19 @@ export type ZoomLayerProps<T> = {
   wrapOrigin: number
   width: number
   gapRatio?: number
-  /** absolute row range to render (inclusive) */
-  r0: number
-  r1: number
   renderItem(item: T, index: number, tileSize: number): React.ReactNode
   layerRef?: React.MutableRefObject<HTMLDivElement | null>
 }
 
 /**
- * One zoom layer: a plain grid of photos for a (columns, wrap origin) layout,
- * laid out in the layer's own coordinates (tile (r,c) at
- * `(c*pitch, (r-rowMin)*pitch)`). The owner moves/scales the whole layer with
- * a single transform, so nothing re-renders while zooming.
+ * One zoom layer: a grid of photos for a (columns, wrap origin) layout, laid
+ * out in the layer's own coordinates (tile (r,c) at
+ * `(c*pitch, (r-rowMin)*pitch)`). The owner moves/scales the whole layer with a
+ * single transform.
+ *
+ * Every row is rendered; off-screen rows are skipped by the browser thanks to
+ * `content-visibility: auto`, so the grid is never missing a row (no blank
+ * areas) while still staying cheap to scroll.
  */
 const ZoomLayer = <T,>({
   items,
@@ -59,28 +60,28 @@ const ZoomLayer = <T,>({
   wrapOrigin,
   width,
   gapRatio = GAP_RATIO,
-  r0,
-  r1,
   renderItem,
   layerRef,
 }: ZoomLayerProps<T>) => {
   const tile = tileForColumns(width, columns, gapRatio)
   const pitch = tile * (1 + gapRatio)
   const rowMin = rowMinFor(wrapOrigin, columns)
+  const rowMax = rowMaxFor(wrapOrigin, columns, items.length)
   const count = items.length
 
-  const tiles: React.ReactNode[] = []
-  for (let r = Math.max(rowMin, r0); r <= r1; r++) {
+  const rows: React.ReactNode[] = []
+  for (let r = rowMin; r <= rowMax; r++) {
+    const cells: React.ReactNode[] = []
     for (let c = 0; c < columns; c++) {
       const index = wrapOrigin + r * columns + c
       if (index < 0 || index >= count) continue
-      tiles.push(
+      cells.push(
         <div
           key={index}
           style={{
             position: 'absolute',
             left: c * pitch,
-            top: (r - rowMin) * pitch,
+            top: 0,
             width: tile,
             height: tile,
           }}
@@ -89,6 +90,21 @@ const ZoomLayer = <T,>({
         </div>
       )
     }
+    rows.push(
+      <div
+        key={r}
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: (r - rowMin) * pitch,
+          height: tile,
+          contentVisibility: 'auto',
+        } as React.CSSProperties}
+      >
+        {cells}
+      </div>
+    )
   }
 
   return (
@@ -103,7 +119,7 @@ const ZoomLayer = <T,>({
         willChange: 'transform, opacity',
       }}
     >
-      {tiles}
+      {rows}
     </div>
   )
 }
