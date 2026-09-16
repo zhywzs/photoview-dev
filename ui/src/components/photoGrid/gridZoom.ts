@@ -39,7 +39,7 @@ export function readStoredColumns(): number {
     if (stored == null) return DEFAULT_COLUMNS
     const value = parseInt(stored)
     if (isNaN(value)) return DEFAULT_COLUMNS
-    return clampColumns(value)
+    return nearestStop(clampColumns(value))
   } catch {
     return DEFAULT_COLUMNS
   }
@@ -64,7 +64,7 @@ export const useGridZoom = (): GridZoom => {
   )
 
   const setColumns = useCallback((next: number) => {
-    setColumnsState(clampColumns(next))
+    setColumnsState(nearestStop(clampColumns(next)))
   }, [])
 
   const persistTimer = useRef<number | undefined>(undefined)
