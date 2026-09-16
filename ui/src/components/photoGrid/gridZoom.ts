@@ -19,6 +19,20 @@ export function clampColumns(columns: number): number {
   return Math.max(MIN_COLUMNS, Math.min(MAX_COLUMNS, Math.round(columns)))
 }
 
+/** The named stop nearest to an arbitrary column count. */
+export function nearestStop(columns: number): number {
+  let best: number = COLUMN_STOPS[0]
+  let bestDist = Infinity
+  for (const stop of COLUMN_STOPS) {
+    const d = Math.abs(stop - columns)
+    if (d < bestDist) {
+      bestDist = d
+      best = stop
+    }
+  }
+  return best
+}
+
 export function readStoredColumns(): number {
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY)
