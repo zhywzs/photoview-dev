@@ -236,9 +236,12 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     const tgtPanY = tgt != null ? setLayer(tgt, layerTRef.current) : 0
     if (layerSRef.current != null) {
       layerSRef.current.style.opacity = tgt != null ? `${1 - fade}` : '1'
+      layerSRef.current.style.pointerEvents =
+        tgt != null && fade > 0.5 ? 'none' : 'auto'
     }
     if (layerTRef.current != null && tgt != null) {
       layerTRef.current.style.opacity = `${fade}`
+      layerTRef.current.style.pointerEvents = fade <= 0.5 ? 'none' : 'auto'
     }
 
     const rangeFor = (layer: LayerState, panY: number) => {
@@ -416,11 +419,15 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       fingerXRef.current = fx
       fingerYRef.current = fy
       scrollYRef.current = window.scrollY
+      const rect = hostRef.current?.getBoundingClientRect()
+      const hostTop = rect?.top ?? 0
+      const hostLeft = rect?.left ?? 0
       const { columns, wrapOrigin } = srcRef.current
       const pitch = pitchForColumns(effWidth, columns, GAP_RATIO)
       const rowMin = rowMinFor(wrapOrigin, columns)
-      const r = rowMin + Math.floor((fy + scrollYRef.current) / pitch)
-      const c = Math.floor(fx / pitch)
+      const r =
+        rowMin + Math.floor((fy + scrollYRef.current - hostTop) / pitch)
+      const c = Math.floor((fx - hostLeft) / pitch)
       anchorPhotoRef.current = Math.max(
         0,
         Math.min(flatItemsRef.current.length - 1, wrapOrigin + r * columns + c)
@@ -431,7 +438,8 @@ const PhotoGrid = <T extends MediaGalleryFields>({
 
   const beginTransition = useCallback(
     (target: number) => {
-      const rel = fingerXRef.current / Math.max(1, effWidth)
+      const hostLeft = hostRef.current?.getBoundingClientRect().left ?? 0
+      const rel = (fingerXRef.current - hostLeft) / Math.max(1, effWidth)
       const col = Math.max(
         0,
         Math.min(target - 1, Math.round(rel * target - 0.5))
