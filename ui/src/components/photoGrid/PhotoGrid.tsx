@@ -74,6 +74,12 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     return { flatItems: flat, dateGroups: groups }
   }, [sections])
 
+  // visual order is oldest -> newest so the newest photo sits at the
+  // bottom-right and the initial view is the bottom of the timeline
+  const seq = useMemo(() => flatItems.slice().reverse(), [flatItems])
+  const flatItemsRef = useRef(flatItems)
+  flatItemsRef.current = flatItems
+
   const itemKey = useCallback((media: T) => media.id, [])
 
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -171,7 +177,10 @@ const PhotoGrid = <T extends MediaGalleryFields>({
   const onVisibleRange = useCallback(
     (first: number, last: number) => {
       if (first < 0) return
-      const group = groupForIndex(dateGroupsRef.current, first)
+      // `first` is an index into the reversed (oldest -> newest) order; the
+      // date groups are in newest-first order
+      const flatFirst = Math.max(0, flatItemsRef.current.length - 1 - first)
+      const group = groupForIndex(dateGroupsRef.current, flatFirst)
       setFloatingDate(group?.title ?? null)
       const prev = lastRangeRef.current
       if (prev[0] === first && prev[1] === last) return
@@ -230,6 +239,17 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     viewFor(initialView(tile))
     setViewVersion(v => v + 1)
   }, [columns, effWidth, viewFor, initialView])
+
+  // start at the newest photos: scroll to the bottom of the timeline once
+  const didScrollBottomRef = useRef(false)
+  useEffect(() => {
+    if (didScrollBottomRef.current) return
+    if (flatItems.length == 0 || effWidth <= 0) return
+    didScrollBottomRef.current = true
+    window.requestAnimationFrame(() => {
+      window.scrollTo(0, document.documentElement.scrollHeight)
+    })
+  }, [flatItems.length, effWidth])
 
   const startPinchRef = useRef({
     active: false,
@@ -610,7 +630,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     <div ref={hostRef} style={{ touchAction: 'pan-y', position: 'relative' }}>
       {effWidth > 0 && (
         <ContinuousGrid
-          items={flatItems}
+          items={seq}
           width={effWidth}
           initialColumns={columns}
           renderItem={renderItem}
