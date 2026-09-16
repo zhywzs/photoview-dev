@@ -9,7 +9,6 @@ import React, {
 import { useQuery } from '@apollo/client'
 import ContinuousGrid, {
   type ContinuousGridHandle,
-  GAP_RATIO,
   columnsForTile,
   tileForColumns,
 } from './ContinuousGrid'
@@ -199,25 +198,20 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     if (effWidth <= 0) return
     const tile = tileForColumns(effWidth, columns)
     visualTileRef.current = tile
-    gridHandleRef.current?.setView(tile, -1, 0, window.scrollY)
+    gridHandleRef.current?.setView(tile, 0, -1, window.scrollY)
     setViewVersion(v => v + 1)
   }, [columns, effWidth])
 
   const anchorFor = useCallback(
-    (clientY: number): { anchorIndex: number } => {
-      const pitch = tileForColumns(effWidth, columnsRef.current) * (1 + GAP_RATIO)
-      const row = Math.floor((window.scrollY + clientY) / pitch)
-      const index = Math.max(
-        0,
-        Math.min(flatItems.length - 1, row * columnsRef.current)
-      )
-      return { anchorIndex: index }
+    (clientY: number): number => {
+      const hostTop = hostRef.current?.getBoundingClientRect().top ?? 0
+      return window.scrollY + clientY - hostTop
     },
-    [effWidth, flatItems.length]
+    []
   )
 
   const animateTo = useCallback(
-    (targetColumns: number, anchorIndex: number, anchorScreenY: number) => {
+    (targetColumns: number, anchorContentY: number, anchorScreenY: number) => {
       if (settleRafRef.current != 0) {
         window.cancelAnimationFrame(settleRafRef.current)
         settleRafRef.current = 0
@@ -234,8 +228,12 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         const tile = from + (to - from) * eased
         visualTileRef.current = tile
         lastOffset =
-          gridHandleRef.current?.setView(tile, anchorIndex, anchorScreenY, scrollY) ??
-          0
+          gridHandleRef.current?.setView(
+            tile,
+            anchorContentY,
+            anchorScreenY,
+            scrollY
+          ) ?? 0
         if (k < 1) {
           settleRafRef.current = window.requestAnimationFrame(step)
         } else {
@@ -245,7 +243,12 @@ const PhotoGrid = <T extends MediaGalleryFields>({
           zoom.setColumns(targetColumns)
           onColumnsChangeRef.current?.(targetColumns)
           visualTileRef.current = to
-          gridHandleRef.current?.setView(to, anchorIndex, anchorScreenY, window.scrollY)
+          gridHandleRef.current?.setView(
+            to,
+            anchorContentY,
+            anchorScreenY,
+            window.scrollY
+          )
         }
       }
       settleRafRef.current = window.requestAnimationFrame(step)
@@ -259,7 +262,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     startTile: 0,
     lastDist: 0,
     midY: 0,
-    anchorIndex: 0,
+    anchorContentY: 0,
     scrollY: 0,
   })
   const pinchActiveRef = useRef(false)
@@ -293,7 +296,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       g.startTile = visualTileRef.current || tileForColumns(effWidth, columnsRef.current)
       g.midY = midY(event.touches)
       g.scrollY = window.scrollY
-      g.anchorIndex = anchorFor(g.midY).anchorIndex
+      g.anchorContentY = anchorFor(g.midY)
       pinchActiveRef.current = true
     }
 
@@ -309,7 +312,12 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       const maxTile = tileForColumns(effWidth, 3)
       tile = Math.max(minTile * 0.85, Math.min(maxTile * 1.15, tile))
       visualTileRef.current = tile
-      gridHandleRef.current?.setView(tile, g.anchorIndex, g.midY, g.scrollY)
+      gridHandleRef.current?.setView(
+        tile,
+        g.anchorContentY,
+        g.midY,
+        g.scrollY
+      )
     }
 
     const onTouchEnd = (event: TouchEvent) => {
@@ -323,7 +331,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
         const target = clampColumns(
           Math.round(columnsForTile(effWidth, visualTileRef.current))
         )
-        animateTo(target, g.anchorIndex, g.midY)
+        animateTo(target, g.anchorContentY, g.midY)
         return
       }
 
@@ -346,8 +354,8 @@ const PhotoGrid = <T extends MediaGalleryFields>({
           const alternate = alternateRef.current ?? (current <= 5 ? 15 : 5)
           alternateRef.current = current
           if (alternate != current) {
-            const { anchorIndex } = anchorFor(touch.clientY)
-            animateTo(alternate, anchorIndex, touch.clientY)
+            const anchorContentY = anchorFor(touch.clientY)
+            animateTo(alternate, anchorContentY, touch.clientY)
           }
         } else {
           lastTapRef.current = { time: now, x: touch.clientX, y: touch.clientY }
@@ -363,7 +371,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       const target = clampColumns(
         Math.round(columnsForTile(effWidth, visualTileRef.current))
       )
-      animateTo(target, g.anchorIndex, g.midY)
+      animateTo(target, g.anchorContentY, g.midY)
     }
 
     const onWheel = (event: WheelEvent) => {
@@ -380,7 +388,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       if (dir == 0) return
       wheelAccRef.current = 0
       const current = columnsRef.current
-      const { anchorIndex } = anchorFor(event.clientY)
+      const anchorContentY = anchorFor(event.clientY)
       let target: number
       if (dir > 0) {
         target = COLUMN_STOPS.find(s => s > current) ?? 30
@@ -389,7 +397,7 @@ const PhotoGrid = <T extends MediaGalleryFields>({
           [...COLUMN_STOPS].reverse().find(s => s < current) ?? 3
       }
       if (target == current) return
-      animateTo(target, anchorIndex, event.clientY)
+      animateTo(target, anchorContentY, event.clientY)
     }
 
     const onGestureStart = (e: Event) => e.preventDefault()
@@ -422,8 +430,8 @@ const PhotoGrid = <T extends MediaGalleryFields>({
     if (effWidth <= 0) return
     gridHandleRef.current?.setView(
       visualTileRef.current,
-      -1,
       0,
+      -1,
       window.scrollY
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -450,7 +458,6 @@ const PhotoGrid = <T extends MediaGalleryFields>({
       {effWidth > 0 && (
         <ContinuousGrid
           items={flatItems}
-          itemKey={itemKey}
           width={effWidth}
           initialColumns={columns}
           renderItem={renderItem}

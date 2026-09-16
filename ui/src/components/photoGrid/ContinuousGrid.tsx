@@ -4,33 +4,29 @@ import React, {
   useRef,
   useState,
 } from 'react'
-import { clampColumns, MAX_COLUMNS } from './gridZoom'
+import { MAX_COLUMNS } from './gridZoom'
 
 /** gap between tiles, as a fraction of the tile size */
 export const GAP_RATIO = 0.06
 
 export type ContinuousGridHandle = {
   /**
-   * Lay out the grid for the given visual tile size, keeping `anchorIndex`
-   * at `anchorScreenY` (viewport px). Called every frame by the gesture.
-   * Returns the vertical offset applied to the container (to fold into the
-   * scroll when the gesture settles).
+   * Lay the slot grid out for the given visual tile size, keeping the content
+   * point `anchorContentY` at `anchorScreenY`. Returns the container offset.
    */
   setView(
     tile: number,
-    anchorIndex: number,
+    anchorContentY: number,
     anchorScreenY: number,
     scrollY: number
   ): number
-  /** Current content height (px). */
   contentHeight(): number
 }
 
 type ContinuousGridProps<T> = {
   items: T[]
-  itemKey(item: T): string
   width: number
-  /** committed column count; the mounted tiles are sized for this */
+  /** committed column count (used for the first paint before setView) */
   initialColumns: number
   renderItem(item: T, index: number, baseSize: number): React.ReactNode
   handleRef?: React.MutableRefObject<ContinuousGridHandle | null>
@@ -57,26 +53,25 @@ export function columnsForTile(
   return (width / tile + gapRatio) / (1 + gapRatio)
 }
 
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v))
 }
 
+/** where the per-slot crossfade runs, as a fraction of the column step */
+const FADE_START = 0.55
+
 /**
- * A single continuous photo grid.
+ * A single continuous grid made of fixed slots.
  *
- * There is no "per level page": the layout is interpolated between the two
- * adjacent integer column counts that bracket the current visual tile size.
- * Because adjacent counts differ by one column, every photo only moves by up
- * to one cell, continuously - so zooming out grows the extra column out of
- * the right edge instead of swapping in a second page.
- *
- * Positions are written imperatively (transform only) so a gesture never
- * re-renders React; the tiles themselves are rendered once per column change
- * at the tile size of the preceding column and then scaled with CSS.
+ * A slot is identified by (row, column); its position only depends on the
+ * current pitch, so slots never swap places - zooming scales the whole grid.
+ * The photo in a slot is `row * columns + column`, so when the column count
+ * changes (crossing the threshold) the slots below the first row change their
+ * photo; that change is a crossfade inside the container rather than a
+ * re-layout. Columns/rows that come into view enter from the screen edge.
  */
 const ContinuousGrid = <T,>({
   items,
-  itemKey,
   width,
   initialColumns,
   renderItem,
@@ -86,99 +81,109 @@ const ContinuousGrid = <T,>({
   const count = items.length
   const containerRef = useRef<HTMLDivElement | null>(null)
   const innerRef = useRef<HTMLDivElement | null>(null)
-  const tileEls = useRef(new Map<number, HTMLDivElement>())
+  const slotEls = useRef(new Map<string, HTMLDivElement>())
+  const overlayEls = useRef(new Map<string, HTMLDivElement>())
   const latest = useRef({ width, count, gapRatio: GAP_RATIO })
   latest.current = { width, count, gapRatio: GAP_RATIO }
 
-  // tokens that describe which items are mounted and at which base size
+  // which slots are mounted (row range + column count at render time)
   const [render, setRender] = useState(() => ({
-    columns: 5,
-    base: width / 5,
-    first: 0,
-    last: Math.min(count, 120),
+    r0: 0,
+    r1: 4,
+    cLo: initialColumns,
+    cHi: initialColumns + 1,
+    mountedHi: initialColumns + 1,
   }))
   const renderRef = useRef(render)
   renderRef.current = render
   const lastView = useRef<{
     tile: number
-    anchorIndex: number
+    anchorContentY: number
     anchorScreenY: number
     scrollY: number
   } | null>(null)
+  // overlay layers are only mounted while a per-slot crossfade is running,
+  // so the DOM stays at one tile per slot the rest of the time
+  const [crossfade, setCrossfade] = useState(false)
+  const crossfadeRef = useRef(false)
 
-  // (re)initialise the mounted range / base when data or width changes
   useLayoutEffect(() => {
     const vh = typeof window !== 'undefined' ? window.innerHeight : 800
     const scrollY = typeof window !== 'undefined' ? window.scrollY : 0
-    const columns = clampColumns(initialColumns)
-    const base = tileForColumns(width, columns)
+    const c = Math.max(3, initialColumns)
+    const base = tileForColumns(width, c)
     const pitch = base * (1 + GAP_RATIO)
-    const perScreen = Math.max(1, Math.ceil((vh / pitch) * columns))
-    const first = Math.max(0, Math.floor(scrollY / pitch) * columns - perScreen)
-    const last = Math.min(count, first + perScreen * 2 + columns)
-    setRender({ columns, base, first, last })
+    const r0 = Math.max(0, Math.floor(scrollY / pitch) - 1)
+    const r1 = r0 + Math.ceil(vh / pitch) + 3
+    setRender({
+      r0,
+      r1,
+      cLo: c,
+      cHi: c + 1,
+      mountedHi: c + 1,
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [width, count, initialColumns])
 
   const handle = useMemo<ContinuousGridHandle>(
     () => ({
       contentHeight() {
-        const inner = innerRef.current
-        return inner ? inner.offsetHeight : 0
+        return innerRef.current ? innerRef.current.offsetHeight : 0
       },
-      setView(tile, anchorIndex, anchorScreenY, scrollY) {
+      setView(tile, anchorContentY, anchorScreenY, scrollY) {
         const { width: w, count: n, gapRatio: r } = latest.current
-        if (tile <= 0 || w <= 0 || n === 0) return 0
-        lastView.current = { tile, anchorIndex, anchorScreenY, scrollY }
+        if (tile <= 0 || w <= 0) return 0
+        lastView.current = { tile, anchorContentY, anchorScreenY, scrollY }
         const pitch = tile * (1 + r)
         const cv = columnsForTile(w, tile, r)
-        const c0 = Math.max(1, Math.min(MAX_COLUMNS, Math.floor(cv)))
-        const c1 = c0 + 1
-        const f = Math.max(0, Math.min(1, cv - c0))
+        const cLo = Math.max(1, Math.min(MAX_COLUMNS - 1, Math.floor(cv)))
+        const cHi = cLo + 1
+        const frac = clamp(cv - cLo, 0, 1)
+        const x = clamp((frac - FADE_START) / (1 - FADE_START), 0, 1)
 
-        const rc = renderRef.current
-
-        // mount a wider range if the visible window has drifted
-        const effCols = 1 / lerp(1 / c0, 1 / c1, f)
-        const vh = window.innerHeight || 800
-        const wantFirst = Math.max(0, Math.floor((scrollY / pitch) * effCols) - effCols * 2)
-        const wantLast = Math.min(n, Math.ceil(((scrollY + vh) / pitch) * effCols) + effCols * 2)
-        if (wantFirst < rc.first || wantLast > rc.last) {
-          const nextFirst = Math.max(0, Math.min(rc.first, wantFirst - effCols))
-          const nextLast = Math.min(n, Math.max(rc.last, wantLast + effCols))
-          setRender(prev => ({ ...prev, first: nextFirst, last: nextLast }))
+        const shouldFade = x > 0
+        if (shouldFade !== crossfadeRef.current) {
+          crossfadeRef.current = shouldFade
+          setCrossfade(shouldFade)
         }
 
-        const base = rc.base > 0 ? rc.base : tile
-        const scale = tile / base
-        for (const [i, el] of tileEls.current) {
-          const xA = (i % c0) * pitch
-          const xB = (i % c1) * pitch
-          const yA = Math.floor(i / c0) * pitch
-          const yB = Math.floor(i / c1) * pitch
-          const x = lerp(xA, xB, f)
-          const y = lerp(yA, yB, f)
-          el.style.transform = `translate(${x}px, ${y}px) scale(${scale})`
+        const vh = window.innerHeight || 800
+        const r0 = Math.max(0, Math.floor((scrollY - pitch * 2) / pitch))
+        const r1 = r0 + Math.ceil(vh / pitch) + 4
+        const rc = renderRef.current
+        if (cLo !== rc.cLo || cHi !== rc.cHi || r0 < rc.r0 || r1 > rc.r1) {
+          setRender({
+            r0: Math.min(rc.r0, r0),
+            r1: Math.max(rc.r1, r1),
+            cLo,
+            cHi,
+            mountedHi: Math.max(rc.mountedHi, cHi),
+          })
+        }
+
+        // the tiles are mounted at the render-time base size; scale to the
+        // exact current tile size
+        const base = tileForColumns(w, rc.cLo)
+        const scale = base > 0 ? tile / base : 1
+        const offsetY =
+          anchorScreenY < 0 ? 0 : anchorScreenY + scrollY - anchorContentY
+
+        for (const [key, el] of slotEls.current) {
+          const [rs, cs] = key.split(':')
+          el.style.transform = `translate(${+cs * pitch}px, ${+rs * pitch}px) scale(${scale})`
+        }
+        for (const [, el] of overlayEls.current) {
+          el.style.opacity = `${x}`
         }
 
         const inner = innerRef.current
-        const hA = Math.ceil(n / c0) * pitch
-        const hB = Math.ceil(n / c1) * pitch
-        const height = lerp(hA, hB, f)
-        if (inner != null) inner.style.height = `${height}px`
-
-        // keep the anchored photo at the same viewport position (a negative
-        // anchor means "no gesture": render at the natural position)
-        let offsetY = 0
-        if (anchorIndex >= 0) {
-          const aA = Math.floor(anchorIndex / c0) * pitch
-          const aB = Math.floor(anchorIndex / c1) * pitch
-          const anchorTop = lerp(aA, aB, f)
-          offsetY = anchorScreenY + scrollY - anchorTop
+        if (inner != null) {
+          const rows = Math.ceil(n / cLo)
+          inner.style.height = `${rows * pitch}px`
+          inner.style.transform = `translateY(${offsetY}px)`
         }
-        if (inner != null) inner.style.transform = `translateY(${offsetY}px)`
 
-        onVisibleRange?.(wantFirst, wantLast)
+        onVisibleRange?.(r0 * cLo, Math.min(n - 1, (r1 + 1) * cLo))
         return offsetY
       },
     }),
@@ -190,44 +195,64 @@ const ContinuousGrid = <T,>({
     if (handleRef != null) handleRef.current = handle
   }, [handleRef, handle])
 
-  // re-apply the last view whenever the mounted tiles (or their base size)
-  // change, so newly mounted tiles are positioned immediately
+  // position slots whenever the mounted set changes
   useLayoutEffect(() => {
     const v = lastView.current
-    const tile = v?.tile ?? tileForColumns(width, initialColumns)
-    handle.setView(
-      tile,
-      v?.anchorIndex ?? -1,
-      v?.anchorScreenY ?? 0,
-      v?.scrollY ?? window.scrollY
-    )
+    if (v != null) {
+      handle.setView(v.tile, v.anchorContentY, v.anchorScreenY, v.scrollY)
+    } else {
+      handle.setView(tileForColumns(width, initialColumns), 0, 0, window.scrollY)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [render.first, render.last, render.base, width, initialColumns])
+  }, [render.r0, render.r1, render.cLo, render.cHi, render.mountedHi, width])
 
-  const rendered = []
-  for (let i = render.first; i < render.last && i < count; i++) {
-    const item = items[i]
-    if (item == null) continue
-    rendered.push(
-      <div
-        key={itemKey(item)}
-        ref={el => {
-          if (el != null) tileEls.current.set(i, el)
-          else tileEls.current.delete(i)
-        }}
-        style={{
-          position: 'absolute',
-          left: 0,
-          top: 0,
-          width: render.base,
-          height: render.base,
-          transformOrigin: '0 0',
-          willChange: 'transform',
-        }}
-      >
-        {renderItem(item, i, render.base)}
-      </div>
-    )
+  const slots: React.ReactNode[] = []
+  const rr = renderRef.current
+  for (let row = rr.r0; row < rr.r1; row++) {
+    for (let col = 0; col <= rr.mountedHi; col++) {
+      const loIndex = row * rr.cLo + col
+      const hiIndex = row * rr.cHi + col
+      if (loIndex >= count && hiIndex >= count) continue
+      const loItem = loIndex < count ? items[loIndex] : null
+      const hiItem = hiIndex < count ? items[hiIndex] : null
+      const differs = hiItem != null && loItem !== hiItem
+      const key = `${row}:${col}`
+      slots.push(
+        <div
+          key={key}
+          ref={el => {
+            if (el != null) slotEls.current.set(key, el)
+            else slotEls.current.delete(key)
+          }}
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: tileForColumns(width, rr.cLo),
+            height: tileForColumns(width, rr.cLo),
+            transformOrigin: '0 0',
+          }}
+        >
+          {loItem != null && renderItem(loItem, loIndex, tileForColumns(width, rr.cLo))}
+          {differs && crossfade && (
+            <div
+              ref={el => {
+                if (el != null) overlayEls.current.set(key, el)
+                else overlayEls.current.delete(key)
+              }}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                opacity: 0,
+                pointerEvents: 'none',
+              }}
+            >
+              {renderItem(hiItem as T, hiIndex, tileForColumns(width, rr.cLo))}
+            </div>
+          )}
+        </div>
+      )
+    }
   }
 
   return (
@@ -236,7 +261,7 @@ const ContinuousGrid = <T,>({
       style={{ position: 'relative', width: '100%', overflow: 'hidden' }}
     >
       <div ref={innerRef} style={{ position: 'relative', width: '100%' }}>
-        {rendered}
+        {slots}
       </div>
     </div>
   )
